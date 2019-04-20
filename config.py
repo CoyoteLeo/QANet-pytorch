@@ -11,12 +11,7 @@ GLOVE_WORD_REPRESENTATION_DIM = 300
 CHAR_REPRESENTATION_DIM = 200
 
 SQUAD_DIR = os.path.join(DATA_DIR, "squad")
-SQUAD_V1_1_DIR = os.path.join(SQUAD_DIR, "v1.1")
-SQUAD_TRAIN_V1_1 = os.path.join(SQUAD_V1_1_DIR, "train.json")
-SQUAD_DEV_V1_1 = os.path.join(SQUAD_V1_1_DIR, "dev.json")
-SQUAD_V2_0_DIR = os.path.join(SQUAD_DIR, "v2.0")
-SQUAD_TRAIN_V2_0 = os.path.join(SQUAD_V2_0_DIR, "train.json")
-SQUAD_DEV_V2_0 = os.path.join(SQUAD_V2_0_DIR, "dev.json")
+ALL_SUPPORT_SQUAD_VERSION = ["v1.1", "v2.0"]
 
 # limit
 PARA_LIMIT = 400  # Limit length for paragraph
