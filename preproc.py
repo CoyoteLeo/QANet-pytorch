@@ -95,6 +95,8 @@ class SQuAd:
                                 self.char_counter[char] += 1
                         y1s, y2s = [], []
                         answer_texts = []
+                        if len(qa["answers"]) == 0:
+                            continue
                         for answer in qa["answers"]:
                             answer_text = answer["text"]
                             answer_start = answer['answer_start']
@@ -157,10 +159,10 @@ class SQuAd:
         ans_limit = config.ANS_LIMIT
         char_limit = config.CHAR_LIMIT
 
-        def filter_func(qa_example):
-            return len(qa_example["context_tokens"]) > para_limit or \
-                   len(qa_example["ques_tokens"]) > ques_limit or \
-                   (qa_example["y2s"][0] - qa_example["y1s"][0]) > ans_limit
+        def validate(qa_example):
+            return len(qa_example["context_tokens"]) <= para_limit and \
+                   len(qa_example["ques_tokens"]) <= ques_limit and \
+                   (qa_example["y2s"][0] - qa_example["y1s"][0]) <= ans_limit
 
         def _get_word(_word):
             return word2idx_dict.get(_word) or word2idx_dict.get(_word.lower()) or word2idx_dict.get(_word.capitalize()) \
@@ -180,7 +182,7 @@ class SQuAd:
         ids = []
         for n, example in tqdm(enumerate(examples)):
             total_valid += 1
-            if filter_func(example):
+            if not validate(example):
                 continue
             total += 1
 
