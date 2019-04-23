@@ -58,6 +58,23 @@ class Embedding(nn.Module):
         return emb
 
 
+class DepthwiseSeparableConvolution(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, bias=True, activation=F.relu):
+        super(DepthwiseSeparableConvolution, self).__init__()
+        self.depthwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=out_channels,
+                                               kernel_size=kernel_size, padding=kernel_size // 2, groups=in_channels,
+                                               bias=bias)
+        self.pointwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=out_channels,
+                                               kernel_size=1, bias=True)
+        self.activation = activation
+
+    def forward(self, x):
+        y = self.pointwise_convolution(self.depthwise_convolution(x))
+        if self.activation:
+            y = self.activation(y)
+        return y
+
+
 class QANet(nn.Module):
     def __init__(self, word_mat, char_mat):
         super().__init__()
