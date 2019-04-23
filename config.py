@@ -32,3 +32,9 @@ TRAIN_EVAL_FILE = "train_eval.json"
 DEV_EVAL_FILE = "dev_eval.json"
 WORD2IDX_FILE = "word2idx.json"
 CHAR2IDX_FILE = "char2idx.json"
+
+# model config
+HIDDEN_SIZE = 128
+WORD_EMBEDDING_DROPOUT = 0.1
+CHAR_EMBEDDING_DROPOUT = 0.05
+LAYERS_DROPOUT = 0.1
