@@ -127,9 +127,12 @@ class MultiHeadAttention(nn.Module):
     def forward(self, x, mask):
         batch_size, dim, length = x.size()
         x = x.transpose(1, 2)
-        q = self.q_linear(x).view(batch_size, length, self.head_number, self.dim_per_head)  # project to eight multihead matrix
-        k = self.k_linear(x).view(batch_size, length, self.head_number, self.dim_per_head)  # project to eight multihead matrix
-        v = self.v_linear(x).view(batch_size, length, self.head_number, self.dim_per_head)  # project to eight multihead matrix
+        q = self.q_linear(x).view(batch_size, length, self.head_number,
+                                  self.dim_per_head)  # project to eight multihead matrix
+        k = self.k_linear(x).view(batch_size, length, self.head_number,
+                                  self.dim_per_head)  # project to eight multihead matrix
+        v = self.v_linear(x).view(batch_size, length, self.head_number,
+                                  self.dim_per_head)  # project to eight multihead matrix
         q = q.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
         k = k.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
         v = v.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
@@ -159,6 +162,7 @@ class EncoderBlock(nn.Module):
              for _ in range(convolution_number)]
         )
         self.self_attention = MultiHeadAttention(hidden_size)
+        self.feedforward = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, x, mask):
         x = self.conv1d(x)
@@ -168,11 +172,23 @@ class EncoderBlock(nn.Module):
             x = self.layer_normalization(x)
             x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
             x = conv(x)
-            # TODO add input first or dropout first
+            # TODO add input first or dropout first & dropout probability
             x = F.dropout(x, config.LAYERS_DROPOUT * (i + 1) / self.convolution_number, training=self.training)
             x = raw + x
+
+        raw = x
         x = self.layer_normalization(x)
         x = self.self_attention(x, mask)
+        # TODO add input first or dropout first
+        x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+        x = raw + x
+
+        raw = x
+        x = self.layer_normalization(x)
+        x = F.relu(self.feedforward(x.transpose(1, 2)).transpose(1, 2))
+        # TODO add input first or dropout first
+        x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+        x = raw + x
         return x
 
 
