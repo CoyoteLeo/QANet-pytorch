@@ -1,3 +1,4 @@
+import math
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -99,6 +100,52 @@ class PositionEncoder(nn.Module):
         return x
 
 
+class MultiHeadAttention(nn.Module):
+    """
+    input:
+        x: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
+    output:
+        attention: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
+    """
+
+    def __init__(self, hidden_size, head_number=config.ATTENTION_HEAD_NUMBER):
+        super().__init__()
+        self.head_number = head_number
+        self.dim_per_head = hidden_size // head_number
+        self.q_linear = nn.Linear(hidden_size, hidden_size)  # 8 * Wq
+        self.v_linear = nn.Linear(hidden_size, hidden_size)  # 8 * Wv
+        self.k_linear = nn.Linear(hidden_size, hidden_size)  # 8 * Wk
+        self.dropout = nn.Dropout(config.LAYERS_DROPOUT)
+        self.linear_project = nn.Linear(hidden_size, hidden_size)
+        self.dim_sqrt_invert = 1 / math.sqrt(self.dim_per_head)
+
+    # TODO trace mask
+    @staticmethod
+    def mask_logits(target, mask):
+        return target * (1 - mask) + mask * (-1e30)
+
+    def forward(self, x, mask):
+        batch_size, dim, length = x.size()
+        x = x.transpose(1, 2)
+        q = self.q_linear(x).view(batch_size, length, self.head_number, self.dim_per_head)  # project to eight multihead matrix
+        k = self.k_linear(x).view(batch_size, length, self.head_number, self.dim_per_head)  # project to eight multihead matrix
+        v = self.v_linear(x).view(batch_size, length, self.head_number, self.dim_per_head)  # project to eight multihead matrix
+        q = q.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
+        k = k.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
+        v = v.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
+        mask = mask.unsqueeze(1).expand(-1, length, -1).repeat(self.head_number, 1, 1)
+        attention = torch.bmm(q, k.transpose(1, 2)) * self.dim_sqrt_invert
+        attention = self.mask_logits(attention, mask)
+        attention = F.softmax(attention, dim=2)
+        attention = self.dropout(attention)
+        attention = torch.bmm(attention, v)
+        attention = attention.view((self.head_number, batch_size, length, self.dim_per_head)) \
+            .permute((1, 2, 0, 3)).contiguous().view((batch_size, length, self.dim_per_head * self.head_number))
+        attention = self.linear_project(attention)
+        attention = self.dropout(attention)
+        return attention.transpose(1, 2)
+
+
 class EncoderBlock(nn.Module):
     def __init__(self, convolution_number, max_length, hidden_size):
         super(EncoderBlock, self).__init__()
@@ -111,10 +158,11 @@ class EncoderBlock(nn.Module):
             [DepthwiseSeparableConvolution(hidden_size, hidden_size, config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE)
              for _ in range(convolution_number)]
         )
+        self.self_attention = MultiHeadAttention(hidden_size)
 
-    def forward(self, x):
+    def forward(self, x, mask):
         x = self.conv1d(x)
-        pos = self.position_encoder(x)
+        x = self.position_encoder(x)
         for i, conv in enumerate(self.convolution_list):
             raw = x
             x = self.layer_normalization(x)
@@ -123,8 +171,9 @@ class EncoderBlock(nn.Module):
             # TODO add input first or dropout first
             x = F.dropout(x, config.LAYERS_DROPOUT * (i + 1) / self.convolution_number, training=self.training)
             x = raw + x
-
-        return pos
+        x = self.layer_normalization(x)
+        x = self.self_attention(x, mask)
+        return x
 
 
 class QANet(nn.Module):
@@ -147,11 +196,9 @@ class QANet(nn.Module):
                                               max_length=config.PARA_LIMIT, hidden_size=config.HIDDEN_SIZE)
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
-        # cmask = (torch.zeros_like(Cwid) == Cwid).float()
-        # qmask = (torch.zeros_like(Qwid) == Qwid).float()
-        # maskC = (torch.ones_like(Cwid) *self.PAD != Cwid).float()
-        # maskQ = (torch.ones_like(Qwid) *self.PAD != Qwid).float()
+        cmask = (torch.zeros_like(Cwid) == Cwid).float()
+        qmask = (torch.zeros_like(Qwid) == Qwid).float()
         Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
-        C, Q = self.embedding_encoder(C), self.embedding_encoder(Q)
+        C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
