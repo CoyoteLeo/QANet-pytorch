@@ -36,12 +36,13 @@ class Highway(nn.Module):
         self.gate = nn.ModuleList([nn.Linear(output_length, output_length) for _ in range(self.n)])
 
     def forward(self, x):
-        # x: shape [batch_size, hidden_size, length] => [8, 500, 400]
+        x = x.transpose(1, 2)
         for i in range(self.n):
             gate = torch.sigmoid(self.gate[i](x))
             nonlinear = F.relu(self.linear[i](x))
             nonlinear = F.dropout(nonlinear, p=config.LAYERS_DROPOUT, training=self.training)
             x = gate * nonlinear + (1 - gate) * x
+        x = x.transpose(1, 2)
         return x
 
 
