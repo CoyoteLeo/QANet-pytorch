@@ -22,6 +22,13 @@ class EncoderBlock(nn.Module):
 
 
 class Highway(nn.Module):
+    """
+    input:
+        x: concat(word_embedding, character_embedding) , shape [batch_size, embedding length, context max length] => [8, 500, 400]
+    output:
+        emb: embedding result, shape [batch_size, embedding length, context max length] => [8, 500, 400]
+    """
+
     def __init__(self, layer_number, output_length):
         super().__init__()
         self.n = layer_number
@@ -39,6 +46,14 @@ class Highway(nn.Module):
 
 
 class Embedding(nn.Module):
+    """
+    input:
+        cemb: character embedding, shape [batch_size, context max length, word length, character embedding length] => [8, 400, 16, 200]
+        wemb word embedding, shape [batch_size, context max length, word embedding length] => [8, 400, 300]
+    output:
+        emb: embedding result, shape [batch_size, embedding length, context max length] => [8, 500, 400]
+1    """
+
     def __init__(self, wemb_dim, cemb_dim):
         super().__init__()
         self.conv2d = nn.Conv2d(cemb_dim, cemb_dim, kernel_size=(1, 5), padding=0, bias=True)
@@ -76,6 +91,16 @@ class DepthwiseSeparableConvolution(nn.Module):
 
 
 class QANet(nn.Module):
+    """
+    input:
+        Cwid: context word id, shape [batch_size, context max length] => [8, 400]
+        Ccid: context word id, shape [batch_size, context max length, word length] => [8, 400, 16]
+        Qwid: context word id, shape [batch_size, Question max length] => [8, 50]
+        Qcid: context word id, shape [batch_size, Question max length, word length] => [8, 50, 16]
+    output:
+        pass
+    """
+
     def __init__(self, word_mat, char_mat):
         super().__init__()
         self.word_embedding = nn.Embedding.from_pretrained(word_mat, freeze=True)
