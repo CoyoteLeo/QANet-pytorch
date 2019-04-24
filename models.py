@@ -91,6 +91,41 @@ class DepthwiseSeparableConvolution(nn.Module):
         return y
 
 
+class PositionEncoder(nn.Module):
+    """
+    input:
+        x: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
+    output:
+        x: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
+    """
+    def __init__(self, max_length, hidden_size):
+        super(PositionEncoder, self).__init__()
+        position = torch.arange(0, max_length).unsqueeze(1).float()
+        div_term = torch.tensor([10000 ** (2 * i / hidden_size) for i in range(0, hidden_size // 2)])
+        self.position_encoding = torch.zeros(max_length, hidden_size, requires_grad=False)
+        self.position_encoding[:, 0::2] = torch.sin(position[:, ] * div_term)
+        self.position_encoding[:, 1::2] = torch.cos(position[:, ] * div_term)
+        self.position_encoding = self.position_encoding.transpose(0, 1)
+
+    def forward(self, x):
+        x = x + self.position_encoding
+        return x
+
+
+class EncoderBlock(nn.Module):
+    def __init__(self, convolution_number, max_length, hidden_size):
+        super(EncoderBlock, self).__init__()
+        self.conv1d = nn.Conv1d(in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
+                                out_channels=config.HIDDEN_SIZE, kernel_size=1)
+        self.position_encoder = PositionEncoder(max_length=max_length, hidden_size=hidden_size)
+
+    def forward(self, x):
+        x = self.conv1d(x)
+        pos = self.position_encoder(x)
+
+        return pos
+
+
 class QANet(nn.Module):
     """
     input:
@@ -107,6 +142,8 @@ class QANet(nn.Module):
         self.word_embedding = nn.Embedding.from_pretrained(word_mat, freeze=True)
         self.char_embedding = nn.Embedding.from_pretrained(char_mat, freeze=False)
         self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1])
+        self.embedding_encoder = EncoderBlock(convolution_number=config.ENCODE_CONVOLUTION_NUMBER,
+                                              max_length=config.PARA_LIMIT, hidden_size=config.HIDDEN_SIZE)
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
         # cmask = (torch.zeros_like(Cwid) == Cwid).float()
@@ -116,3 +153,4 @@ class QANet(nn.Module):
         Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
+        C, Q = self.embedding_encoder(C), self.embedding_encoder(Q)
