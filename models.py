@@ -4,21 +4,7 @@ from torch.nn import functional as F
 
 import config
 
-
-class CQAttention(nn.Module):
-    def __init__(self):
-        super(CQAttention, self).__init__()
-
-    def forward(self, *input):
-        pass
-
-
-class EncoderBlock(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, *input):
-        pass
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Highway(nn.Module):
@@ -98,11 +84,12 @@ class PositionEncoder(nn.Module):
     output:
         x: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
     """
+
     def __init__(self, max_length, hidden_size):
         super(PositionEncoder, self).__init__()
-        position = torch.arange(0, max_length).unsqueeze(1).float()
-        div_term = torch.tensor([10000 ** (2 * i / hidden_size) for i in range(0, hidden_size // 2)])
-        self.position_encoding = torch.zeros(max_length, hidden_size, requires_grad=False)
+        position = torch.arange(0, max_length).unsqueeze(1).float().to(device)
+        div_term = torch.tensor([10000 ** (2 * i / hidden_size) for i in range(0, hidden_size // 2)]).to(device)
+        self.position_encoding = torch.zeros(max_length, hidden_size, requires_grad=False).to(device)
         self.position_encoding[:, 0::2] = torch.sin(position[:, ] * div_term)
         self.position_encoding[:, 1::2] = torch.cos(position[:, ] * div_term)
         self.position_encoding = self.position_encoding.transpose(0, 1)
@@ -115,13 +102,27 @@ class PositionEncoder(nn.Module):
 class EncoderBlock(nn.Module):
     def __init__(self, convolution_number, max_length, hidden_size):
         super(EncoderBlock, self).__init__()
+        self.convolution_number = convolution_number
         self.conv1d = nn.Conv1d(in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
                                 out_channels=config.HIDDEN_SIZE, kernel_size=1)
         self.position_encoder = PositionEncoder(max_length=max_length, hidden_size=hidden_size)
+        self.layer_normalization = nn.LayerNorm([hidden_size, max_length])
+        self.convolution_list = nn.ModuleList(
+            [DepthwiseSeparableConvolution(hidden_size, hidden_size, config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE)
+             for _ in range(convolution_number)]
+        )
 
     def forward(self, x):
         x = self.conv1d(x)
         pos = self.position_encoder(x)
+        for i, conv in enumerate(self.convolution_list):
+            raw = x
+            x = self.layer_normalization(x)
+            x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+            x = conv(x)
+            # TODO add input first or dropout first
+            x = F.dropout(x, config.LAYERS_DROPOUT * (i + 1) / self.convolution_number, training=self.training)
+            x = raw + x
 
         return pos
 
