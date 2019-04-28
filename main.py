@@ -82,7 +82,7 @@ class Runner(object):
         metrics = evaluator.evaluate()
         metrics["loss"] = loss
         if mode == "test":
-            with open("log/answers.json", "w") as f:
+            with open(os.path.join(self.dir, "log", "answers.json"), "w") as f:
                 json.dump(answer_dict, f)
         print(f"{mode.upper()} loss {format(loss, '.8f')} "
               f"F1 {format(metrics['f1'], '.8f')} "
@@ -90,6 +90,8 @@ class Runner(object):
         return metrics
 
     def train(self):
+        if os.path.isdir(os.path.join(self.dir, "log")):
+            os.makedirs(os.path.join(self.dir, "log"))
         with open(os.path.join(self.dir, config.WORD_EMB_FILE), "r") as f:
             word_mat = torch.tensor(np.array(json.load(f), dtype=np.float32))
         with open(os.path.join(self.dir, config.CHAR_EMB_FILE), "r") as f:
