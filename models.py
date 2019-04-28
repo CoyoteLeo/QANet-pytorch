@@ -274,6 +274,15 @@ class QANet(nn.Module):
             out_channels=config.HIDDEN_SIZE, kernel_size=1
         )
         self.cq_attention = CQAttention(hidden_size=config.HIDDEN_SIZE)
+        self.cq_resizer = nn.Conv1d(in_channels=config.HIDDEN_SIZE * 4, out_channels=config.HIDDEN_SIZE, kernel_size=1)
+        self.model_encoder = nn.ModuleList([
+            EncoderBlock(
+                convolution_number=config.MODEL_ENCODER_CONVOLUTION_NUMBER,
+                max_length=config.PARA_LIMIT,
+                hidden_size=config.HIDDEN_SIZE,
+                kernel_size=config.MODEL_ENCODER_CONVOLUTION_KERNEL_SIZE
+            ) for _ in range(config.MODEL_ENCODER_BLOCK_NUMBER)
+        ])
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
         cmask = (torch.zeros_like(Cwid) == Cwid).float()
@@ -281,5 +290,16 @@ class QANet(nn.Module):
         Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
+        C, Q = self.context_resizer(C), self.question_resizer(Q)
         C, Q = self.context_embedding_encoder(C, cmask), self.question_embedding_encoder(Q, qmask)
-        attention = self.cq_attention(C, Q, cmask, qmask)
+        CQ_attention = self.cq_attention(C, Q, cmask, qmask)
+        stacked_model1 = self.cq_resizer(CQ_attention)
+        for enc in self.model_encoder:
+            stacked_model1 = enc(stacked_model1, cmask)
+        stacked_model2 = stacked_model1
+        for enc in self.model_encoder:
+            stacked_model2 = enc(stacked_model2, cmask)
+        stacked_model3 = stacked_model2
+        for enc in self.model_encoder:
+            stacked_model3 = enc(stacked_model3, cmask)
+        return
