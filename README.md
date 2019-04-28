@@ -25,4 +25,7 @@ Any contributions are welcome!
 4. Start Coding
 
 # Todo
+- [ ] typing lint
+- [ ] tuning
+- [ ] squad2.0
 - [ ] augmentation
