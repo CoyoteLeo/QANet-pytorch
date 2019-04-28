@@ -237,6 +237,22 @@ class CQAttention(nn.Module):
         return output
 
 
+class OutputLayer(nn.Module):
+    def __init__(self, hidden_size):
+        super(OutputLayer, self).__init__()
+        self.weight1 = nn.Parameter(torch.empty(hidden_size * 2))
+        self.weight2 = nn.Parameter(torch.empty(hidden_size * 2))
+
+    def forward(self, stacked_model_output1, stacked_model_output2, stacked_model_output3, cmask):
+        start = torch.cat((stacked_model_output1, stacked_model_output2), dim=1)
+        end = torch.cat((stacked_model_output1, stacked_model_output3), dim=1)
+        start = torch.matmul(self.weight1, start)
+        end = torch.matmul(self.weight2, end)
+        start = F.log_softmax(mask_logits(start, cmask), dim=1)
+        end = F.log_softmax(mask_logits(end, cmask), dim=1)
+        return start, end
+
+
 class QANet(nn.Module):
     """
     input:
@@ -245,7 +261,8 @@ class QANet(nn.Module):
         Qwid: context word id, shape [batch_size, Question max length] => [8, 50]
         Qcid: context word id, shape [batch_size, Question max length, word length] => [8, 50, 16]
     output:
-        pass
+        start: start position probability, shape [batch_size, context max length] => [8, 400]
+        end: end position probability, shape [batch_size, context max length] => [8, 400]
     """
 
     def __init__(self, word_mat, char_mat):
@@ -283,6 +300,7 @@ class QANet(nn.Module):
                 kernel_size=config.MODEL_ENCODER_CONVOLUTION_KERNEL_SIZE
             ) for _ in range(config.MODEL_ENCODER_BLOCK_NUMBER)
         ])
+        self.output = OutputLayer(hidden_size=config.HIDDEN_SIZE)
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
         cmask = (torch.zeros_like(Cwid) == Cwid).float()
@@ -293,13 +311,14 @@ class QANet(nn.Module):
         C, Q = self.context_resizer(C), self.question_resizer(Q)
         C, Q = self.context_embedding_encoder(C, cmask), self.question_embedding_encoder(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
-        stacked_model1 = self.cq_resizer(CQ_attention)
+        stacked_model_output1 = self.cq_resizer(CQ_attention)
         for enc in self.model_encoder:
-            stacked_model1 = enc(stacked_model1, cmask)
-        stacked_model2 = stacked_model1
+            stacked_model_output1 = enc(stacked_model_output1, cmask)
+        stacked_model_output2 = stacked_model_output1
         for enc in self.model_encoder:
-            stacked_model2 = enc(stacked_model2, cmask)
-        stacked_model3 = stacked_model2
+            stacked_model_output2 = enc(stacked_model_output2, cmask)
+        stacked_model_output3 = stacked_model_output2
         for enc in self.model_encoder:
-            stacked_model3 = enc(stacked_model3, cmask)
-        return
+            stacked_model_output3 = enc(stacked_model_output3, cmask)
+        start, end = self.output(stacked_model_output1, stacked_model_output2, stacked_model_output3, cmask)
+        return start, end
