@@ -53,7 +53,6 @@ class Embedding(nn.Module):
         cemb = self.conv2d(cemb)
         cemb = F.relu(cemb)
         cemb, _ = torch.max(cemb, dim=3)
-        cemb = cemb.squeeze()
         wemb = F.dropout(wemb, p=config.WORD_EMBEDDING_DROPOUT, training=self.training)
         wemb = wemb.transpose(1, 2)
         emb = torch.cat((cemb, wemb), dim=1)
@@ -158,22 +157,19 @@ class EncoderBlock(nn.Module):
         x: shape [batch_size, hidden_size, max length] => [8, 128, 400]
     """
 
-    def __init__(self, convolution_number, max_length, hidden_size):
+    def __init__(self, convolution_number, max_length, hidden_size, kernel_size):
         super(EncoderBlock, self).__init__()
         self.convolution_number = convolution_number
-        self.conv1d = nn.Conv1d(in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
-                                out_channels=config.HIDDEN_SIZE, kernel_size=1)
         self.position_encoder = PositionEncoder(max_length=max_length, hidden_size=hidden_size)
         self.layer_normalization = nn.LayerNorm([hidden_size, max_length])
         self.convolution_list = nn.ModuleList(
-            [DepthwiseSeparableConvolution(hidden_size, hidden_size, config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE)
+            [DepthwiseSeparableConvolution(hidden_size, hidden_size, kernel_size)
              for _ in range(convolution_number)]
         )
         self.self_attention = MultiHeadAttention(hidden_size)
         self.feedforward = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, x, mask):
-        x = self.conv1d(x)
         x = self.position_encoder(x)
         for i, conv in enumerate(self.convolution_list):
             raw = x
@@ -257,10 +253,26 @@ class QANet(nn.Module):
         self.word_embedding = nn.Embedding.from_pretrained(word_mat, freeze=True)
         self.char_embedding = nn.Embedding.from_pretrained(char_mat, freeze=False)
         self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1])
-        self.context_embedding_encoder = EncoderBlock(convolution_number=config.ENCODE_CONVOLUTION_NUMBER,
-                                                      max_length=config.PARA_LIMIT, hidden_size=config.HIDDEN_SIZE)
-        self.question_embedding_encoder = EncoderBlock(convolution_number=config.ENCODE_CONVOLUTION_NUMBER,
-                                                       max_length=config.QUES_LIMIT, hidden_size=config.HIDDEN_SIZE)
+        self.context_embedding_encoder = EncoderBlock(
+            convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
+            max_length=config.PARA_LIMIT,
+            hidden_size=config.HIDDEN_SIZE,
+            kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
+        )
+        self.context_resizer = nn.Conv1d(
+            in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
+            out_channels=config.HIDDEN_SIZE, kernel_size=1
+        )
+        self.question_embedding_encoder = EncoderBlock(
+            convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
+            max_length=config.QUES_LIMIT,
+            hidden_size=config.HIDDEN_SIZE,
+            kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
+        )
+        self.question_resizer = nn.Conv1d(
+            in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
+            out_channels=config.HIDDEN_SIZE, kernel_size=1
+        )
         self.cq_attention = CQAttention(hidden_size=config.HIDDEN_SIZE)
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
