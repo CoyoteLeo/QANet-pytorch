@@ -86,9 +86,9 @@ class PositionEncoder(nn.Module):
         x: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
     """
 
-    def __init__(self, max_length, hidden_size):
+    def __init__(self, hidden_size, max_length):
         super(PositionEncoder, self).__init__()
-        position = torch.arange(0, max_length).unsqueeze(1).float().to(device)
+        position = torch.arange(0, max_length).to(device).unsqueeze(1).float()
         div_term = torch.tensor([10000 ** (2 * i / hidden_size) for i in range(0, hidden_size // 2)]).to(device)
         self.position_encoding = torch.zeros(max_length, hidden_size, requires_grad=False).to(device)
         self.position_encoding[:, 0::2] = torch.sin(position[:, ] * div_term)
@@ -98,6 +98,11 @@ class PositionEncoder(nn.Module):
     def forward(self, x):
         x = x + self.position_encoding
         return x
+
+
+# TODO trace mask
+def mask_logits(target, mask):
+    return target * (1 - mask) + mask * (-1e30)
 
 
 class MultiHeadAttention(nn.Module):
@@ -119,11 +124,6 @@ class MultiHeadAttention(nn.Module):
         self.linear_project = nn.Linear(hidden_size, hidden_size)
         self.dim_sqrt_invert = 1 / math.sqrt(self.dim_per_head)
 
-    # TODO trace mask
-    @staticmethod
-    def mask_logits(target, mask):
-        return target * (1 - mask) + mask * (-1e30)
-
     def forward(self, x, mask):
         batch_size, dim, length = x.size()
         x = x.transpose(1, 2)
@@ -138,7 +138,7 @@ class MultiHeadAttention(nn.Module):
         v = v.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
         mask = mask.unsqueeze(1).expand(-1, length, -1).repeat(self.head_number, 1, 1)
         attention = torch.bmm(q, k.transpose(1, 2)) * self.dim_sqrt_invert
-        attention = self.mask_logits(attention, mask)
+        attention = mask_logits(attention, mask)
         attention = F.softmax(attention, dim=2)
         attention = self.dropout(attention)
         attention = torch.bmm(attention, v)
@@ -150,6 +150,14 @@ class MultiHeadAttention(nn.Module):
 
 
 class EncoderBlock(nn.Module):
+    """
+    input:
+        x: shape [batch_size, hidden_size, max length] => [8, 500, 400]
+        mask: shape [batch_size, max length] => [8, 400]
+    output:
+        x: shape [batch_size, hidden_size, max length] => [8, 128, 400]
+    """
+
     def __init__(self, convolution_number, max_length, hidden_size):
         super(EncoderBlock, self).__init__()
         self.convolution_number = convolution_number
@@ -192,6 +200,47 @@ class EncoderBlock(nn.Module):
         return x
 
 
+class CQAttention(nn.Module):
+    """
+    input:
+        C: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
+        Q: shape [batch_size, hidden_size, question max length] => [8, 128, 50]
+        cmask: shape [batch_size, context max length] => [8, 400]
+        qmask: shape [batch_size, question max length] => [8, 50]
+    output:
+        attention: shape [batch_size, hidden_size, context max length] => [8, 512, 400]
+    """
+
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.line_project = nn.Parameter(torch.empty(hidden_size * 3))
+
+    def forward(self, C, Q, cmask, qmask):
+        # calculate CQ similarity
+        C = C.transpose(1, 2)  # shape [batch_size, context max length, hidden_size]
+        Q = Q.transpose(1, 2)  # shape [batch_size, question max length, hidden_size]
+        cmask = cmask.unsqueeze(2)  # shape [batch_size, context max length, 1]
+        qmask = qmask.unsqueeze(1)  # shape [batch_size, 1, question max length]
+        # (batch_size, context max length, question max length, hidden_size)
+        shape = (C.size(0), C.size(1), Q.size(1), C.size(2))
+        Ct = C.unsqueeze(2).expand(shape)
+        Qt = Q.unsqueeze(1).expand(shape)
+        CQ = torch.mul(Ct, Qt)  # element-wise multiplication
+
+        # calculate S
+        S = torch.matmul(torch.cat((Ct, Qt, CQ), dim=3), self.line_project)  # trilinear function
+        # context-wise softmax (one context word to every question word)
+        S_row_normalized = F.softmax(mask_logits(S, qmask), dim=2)
+        # question-wise softmax (one question word to every context word)
+        S_column_normalized = F.softmax(mask_logits(S, cmask), dim=1)
+        A = torch.bmm(S_row_normalized, Q)
+        B = torch.bmm(torch.bmm(S_row_normalized, S_column_normalized.transpose(1, 2)), C)
+        output = torch.cat((C, A, torch.mul(C, A), torch.mul(C, B)), dim=2)
+        output = F.dropout(output, p=config.LAYERS_DROPOUT, training=self.training)
+        output = output.transpose(1, 2)
+        return output
+
+
 class QANet(nn.Module):
     """
     input:
@@ -208,8 +257,11 @@ class QANet(nn.Module):
         self.word_embedding = nn.Embedding.from_pretrained(word_mat, freeze=True)
         self.char_embedding = nn.Embedding.from_pretrained(char_mat, freeze=False)
         self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1])
-        self.embedding_encoder = EncoderBlock(convolution_number=config.ENCODE_CONVOLUTION_NUMBER,
-                                              max_length=config.PARA_LIMIT, hidden_size=config.HIDDEN_SIZE)
+        self.context_embedding_encoder = EncoderBlock(convolution_number=config.ENCODE_CONVOLUTION_NUMBER,
+                                                      max_length=config.PARA_LIMIT, hidden_size=config.HIDDEN_SIZE)
+        self.question_embedding_encoder = EncoderBlock(convolution_number=config.ENCODE_CONVOLUTION_NUMBER,
+                                                       max_length=config.QUES_LIMIT, hidden_size=config.HIDDEN_SIZE)
+        self.cq_attention = CQAttention(hidden_size=config.HIDDEN_SIZE)
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
         cmask = (torch.zeros_like(Cwid) == Cwid).float()
@@ -217,4 +269,5 @@ class QANet(nn.Module):
         Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
-        C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
+        C, Q = self.context_embedding_encoder(C, cmask), self.question_embedding_encoder(Q, qmask)
+        attention = self.cq_attention(C, Q, cmask, qmask)
