@@ -248,8 +248,8 @@ class OutputLayer(nn.Module):
         end = torch.cat((stacked_model_output1, stacked_model_output3), dim=1)
         start = torch.matmul(self.weight1, start)
         end = torch.matmul(self.weight2, end)
-        start = F.log_softmax(mask_logits(start, cmask), dim=1)
-        end = F.log_softmax(mask_logits(end, cmask), dim=1)
+        start = mask_logits(start, cmask)
+        end = mask_logits(end, cmask)
         return start, end
 
 
