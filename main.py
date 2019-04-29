@@ -113,41 +113,31 @@ class Runner(object):
                 ema.set(name, p)
 
         optimizer = optim.Adam(filter(lambda param: param.requires_grad, model.parameters()),
-                               lr=config.LEARNING_RATE, betas=(config.ADAM_BETA1, config.ADAM_BETA2), eps=1e-8,
+                               lr=config.BASE_LR, betas=(config.ADAM_BETA1, config.ADAM_BETA2), eps=1e-8,
                                weight_decay=3e-7)
-        cr = 1.0 / math.log(config.LEARNING_RATE_WARM_UP_STEPS)
+        cr = config.LR / math.log(config.LR_WARM_UP_STEPS)
         scheduler = optim.lr_scheduler.LambdaLR(
             optimizer,
-            lr_lambda=lambda epoch_number: cr * math.log(epoch_number + 1)
-            if epoch_number < config.LEARNING_RATE_WARM_UP_STEPS else config.LEARNING_RATE
+            lr_lambda=lambda epoch: cr * math.log(epoch + 1) if epoch < config.LR_WARM_UP_STEPS else config.LR
         )
-
-        # TODO: raw
-        # optimizer = optim.Adam(filter(lambda param: param.requires_grad, model.parameters()),
-        #                        lr=config.BASE_LEARNING_RATE, betas=(config.ADAM_BETA1, config.ADAM_BETA2), eps=1e-8,
-        #                        weight_decay=3e-7)
-        # cr = config.LEARNING_RATE / log2(config.LEARNING_RATE_WARM_UP_STEPS)
-        # scheduler = optim.lr_scheduler.LambdaLR(
-        #     optimizer,
-        #     lr_lambda=lambda epoch_number: cr * log2(epoch_number + 1)
-        #     if epoch_number < config.LEARNING_RATE_WARM_UP_STEPS else config.LEARNING_RATE)
 
         best_f1 = best_em = patience = 0
         for iter in range(0, config.STEPS, config.CHECKPOINT):
             self._train(model=model, optimizer=optimizer, scheduler=scheduler, ema=ema, dataset=train_dataset,
                         start=iter, length=config.CHECKPOINT)
-            self._test(model, train_dataset, train_eval_file, mode="validate")
-            metrics = self._test(model, dev_dataset, dev_eval_file)
             print("Learning rate: {}".format(scheduler.get_lr()))
-            dev_f1 = metrics["f1"]
-            dev_em = metrics["exact_match"]
-            if dev_f1 < best_f1 and dev_em < best_em:
-                patience += 1
-                if patience > config.EARLY_STOP: break
-            else:
-                patience = 0
-                best_f1 = max(best_f1, dev_f1)
-                best_em = max(best_em, dev_em)
+            metrics = self._test(model, train_dataset, train_eval_file, mode="validate")
+
+            # TODO skip earlystopping
+            # dev_f1 = metrics["f1"]
+            # dev_em = metrics["exact_match"]
+            # if dev_f1 < best_f1 and dev_em < best_em:
+            #     patience += 1
+            #     if patience > config.EARLY_STOP: break
+            # else:
+            #     patience = 0
+            #     best_f1 = max(best_f1, dev_f1)
+            #     best_em = max(best_em, dev_em)
 
             torch.save(model, os.path.join(self.dir, "model.pt"))
 
