@@ -47,9 +47,6 @@ class Runner(object):
             for name, p in model.named_parameters():
                 if p.requires_grad:
                     ema.update_parameter(name, p)
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
-        loss_avg = np.mean(losses)
-        print(f"STEP {format(i + 1, '8d')} loss {format(loss_avg, '.8f')}\n")
 
     def _test(self, model: nn.Module, dataset: SQuADDataset, eval_file: dict, mode: str = 'test'):
         model.eval()
@@ -87,7 +84,7 @@ class Runner(object):
                 json.dump(answer_dict, f)
         print(f"{mode.upper()} loss {format(loss, '.8f')} "
               f"F1 {format(metrics['f1'], '.8f')} "
-              f"EM {format(metrics['exact_match'], '.8f')}\n")
+              f"EM {format(metrics['exact_match'], '.8f')}")
         return metrics
 
     def train(self):
@@ -125,8 +122,8 @@ class Runner(object):
         for iter in range(0, config.STEPS, config.CHECKPOINT):
             self._train(model=model, optimizer=optimizer, scheduler=scheduler, ema=ema, dataset=train_dataset,
                         start=iter, length=config.CHECKPOINT)
-            print("Learning rate: {}".format(scheduler.get_lr()))
             metrics = self._test(model, train_dataset, train_eval_file, mode="validate")
+            print("Learning rate: {}\n".format(scheduler.get_lr()))
 
             # TODO skip earlystopping
             # dev_f1 = metrics["f1"]
