@@ -17,6 +17,7 @@ from models import QANet
 from utils import EMA, Evaluator, SQuADDataset
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"current device: {device}")
 
 
 class Runner(object):
@@ -82,7 +83,7 @@ class Runner(object):
         metrics = evaluator.evaluate()
         metrics["loss"] = loss
         if mode == "test":
-            with open(os.path.join(self.dir, "log", "answers.json"), "w") as f:
+            with open(os.path.join(self.dir, "answers.json"), "w") as f:
                 json.dump(answer_dict, f)
         print(f"{mode.upper()} loss {format(loss, '.8f')} "
               f"F1 {format(metrics['f1'], '.8f')} "
