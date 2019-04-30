@@ -55,8 +55,8 @@ class Embedding(nn.Module):
         cemb = F.relu(cemb)
         cemb, _ = torch.max(cemb, dim=3)
         # cemb = F.dropout(cemb, p=config.CHAR_EMBEDDING_DROPOUT, training=self.training)
-        wemb = wemb.transpose(1, 2)
         wemb = F.dropout(wemb, p=config.WORD_EMBEDDING_DROPOUT, training=self.training)
+        wemb = wemb.transpose(1, 2)
         emb = torch.cat((cemb, wemb), dim=1)
         emb = self.highway(emb)
         return emb
@@ -164,20 +164,22 @@ class EncoderBlock(nn.Module):
         super(EncoderBlock, self).__init__()
         self.convolution_number = convolution_number
         self.position_encoder = PositionEncoder(hidden_size)
-        self.layer_normalization = nn.LayerNorm(hidden_size)
         self.convolution_list = nn.ModuleList(
             [DepthwiseSeparableConvolution(hidden_size, hidden_size, kernel_size)
              for _ in range(convolution_number)]
         )
+        self.layer_normalization_list = nn.ModuleList([nn.LayerNorm(hidden_size) for _ in range(convolution_number)])
+        self.attention_layer_normalization = nn.LayerNorm(hidden_size)
         self.self_attention = MultiHeadAttention(hidden_size, head_number)
+        self.feedforward_layer_normalization = nn.LayerNorm(hidden_size)
         self.feedforward = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, x, mask):
         x = self.position_encoder(x)
         # x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
-        for i, conv in enumerate(self.convolution_list):
+        for i, (conv, norm) in enumerate(zip(self.convolution_list, self.layer_normalization_list)):
             raw = x
-            x = self.layer_normalization(x.transpose(1, 2)).transpose(1, 2)
+            x = norm(x.transpose(1, 2)).transpose(1, 2)
             x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
             x = conv(x)
             # TODO dropout probability
@@ -185,13 +187,13 @@ class EncoderBlock(nn.Module):
             x = raw + x
 
         raw = x
-        x = self.layer_normalization(x.transpose(1, 2)).transpose(1, 2)
+        x = self.attention_layer_normalization(x.transpose(1, 2)).transpose(1, 2)
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = self.self_attention(x, mask)
         x = raw + x
 
         raw = x
-        x = self.layer_normalization(x.transpose(1, 2)).transpose(1, 2)
+        x = self.feedforward_layer_normalization(x.transpose(1, 2)).transpose(1, 2)
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = self.feedforward(x.transpose(1, 2)).transpose(1, 2)
         x = F.relu(x)
