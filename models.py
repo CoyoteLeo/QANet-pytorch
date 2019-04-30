@@ -24,9 +24,9 @@ class Highway(nn.Module):
 
     def forward(self, x):
         x = x.transpose(1, 2)
-        for i in range(self.n):
-            gate = torch.sigmoid(self.gate[i](x))
-            output = self.linear[i](x)
+        for linear, gate in zip(self.linear, self.gate):
+            gate = torch.sigmoid(gate(x))
+            output = linear(x)
             output = F.relu(output)
             output = F.dropout(output, p=config.LAYERS_DROPOUT, training=self.training)
             x = gate * output + (1 - gate) * x

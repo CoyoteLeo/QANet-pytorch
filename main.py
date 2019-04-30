@@ -156,7 +156,7 @@ if __name__ == "__main__":
         runner.train()
     elif parser.mode == "debug":
         config.BATCH_SIZE = 1
-        config.STEPS = 32
+        config.STEPS = 16
         config.TEST_STEPS = 2
         config.VALIDATION_STEPS = 2
         config.CHECKPOINT = 2
