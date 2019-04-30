@@ -190,6 +190,8 @@ class EncoderBlock(nn.Module):
         x = self.attention_layer_normalization(x.transpose(1, 2)).transpose(1, 2)
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = self.self_attention(x, mask)
+        # TODO add input first or dropout first
+        x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = raw + x
 
         raw = x
@@ -197,6 +199,7 @@ class EncoderBlock(nn.Module):
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = self.feedforward(x.transpose(1, 2)).transpose(1, 2)
         x = F.relu(x)
+        # TODO add input first or dropout first
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = raw + x
         return x
@@ -276,11 +279,7 @@ class QANet(nn.Module):
         self.word_embedding = nn.Embedding.from_pretrained(word_mat, freeze=True)
         self.char_embedding = nn.Embedding.from_pretrained(char_mat, freeze=False)
         self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1])
-        self.context_resizer = nn.Conv1d(
-            in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
-            out_channels=config.HIDDEN_SIZE, kernel_size=1
-        )
-        self.question_resizer = nn.Conv1d(
+        self.embedding_resizer = nn.Conv1d(
             in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
             out_channels=config.HIDDEN_SIZE, kernel_size=1
         )
@@ -302,9 +301,7 @@ class QANet(nn.Module):
         Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
-        C, Q = self.context_resizer(C), self.question_resizer(Q)
-        # C = F.dropout(C, p=config.LAYERS_DROPOUT, training=self.training)
-        # Q = F.dropout(Q, p=config.LAYERS_DROPOUT, training=self.training)
+        C, Q = self.embedding_resizer(C), self.embedding_resizer(Q)
         C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
         stacked_model_output1 = self.cq_resizer(CQ_attention)
