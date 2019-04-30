@@ -47,7 +47,7 @@ class Runner(object):
                 if p.requires_grad:
                     ema.update_parameter(name, p)
 
-    def _test(self, model: nn.Module, dataset: SQuADDataset, eval_file: dict, mode: str = 'test'):
+    def _test(self, model: nn.Module, dataset: SQuADDataset, eval_file: dict, step=None, mode: str = 'test'):
         model.eval()
         answer_dict = {}
         losses = []
@@ -81,7 +81,7 @@ class Runner(object):
         if mode == "test":
             with open(os.path.join(self.dir, "answers.json"), "w") as f:
                 json.dump(answer_dict, f)
-        print(f"{mode.upper()} loss {format(loss, '.8f')} "
+        print(f"{f'Step: {step} ' if step else ''}{mode.upper()} loss {format(loss, '.8f')} "
               f"F1 {format(metrics['f1'], '.8f')} "
               f"EM {format(metrics['exact_match'], '.8f')}")
         return metrics
@@ -121,7 +121,7 @@ class Runner(object):
         for iter in range(0, config.STEPS, config.CHECKPOINT):
             self._train(model=model, optimizer=optimizer, scheduler=scheduler, ema=ema, dataset=train_dataset,
                         start=iter, length=config.CHECKPOINT)
-            metrics = self._test(model, train_dataset, train_eval_file, mode="validate")
+            metrics = self._test(model, train_dataset, train_eval_file, step=iter, mode="validate")
             print("Learning rate: {}\n".format(scheduler.get_lr()))
 
             # TODO skip earlystopping
