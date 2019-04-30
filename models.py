@@ -54,7 +54,7 @@ class Embedding(nn.Module):
         cemb = self.conv2d(cemb)
         cemb = F.relu(cemb)
         cemb, _ = torch.max(cemb, dim=3)
-        cemb = F.dropout(cemb, p=config.CHAR_EMBEDDING_DROPOUT, training=self.training)
+        # cemb = F.dropout(cemb, p=config.CHAR_EMBEDDING_DROPOUT, training=self.training)
         wemb = wemb.transpose(1, 2)
         wemb = F.dropout(wemb, p=config.WORD_EMBEDDING_DROPOUT, training=self.training)
         emb = torch.cat((cemb, wemb), dim=1)
@@ -174,7 +174,7 @@ class EncoderBlock(nn.Module):
 
     def forward(self, x, mask):
         x = self.position_encoder(x)
-        x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+        # x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         for i, conv in enumerate(self.convolution_list):
             raw = x
             x = self.layer_normalization(x.transpose(1, 2)).transpose(1, 2)
@@ -301,8 +301,8 @@ class QANet(nn.Module):
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
         C, Q = self.context_resizer(C), self.question_resizer(Q)
-        C = F.dropout(C, p=config.LAYERS_DROPOUT, training=self.training)
-        Q = F.dropout(Q, p=config.LAYERS_DROPOUT, training=self.training)
+        # C = F.dropout(C, p=config.LAYERS_DROPOUT, training=self.training)
+        # Q = F.dropout(Q, p=config.LAYERS_DROPOUT, training=self.training)
         C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
         stacked_model_output1 = self.cq_resizer(CQ_attention)
