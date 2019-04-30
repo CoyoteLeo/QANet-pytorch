@@ -29,3 +29,4 @@ Any contributions are welcome!
 - [ ] tuning
 - [ ] squad2.0
 - [ ] augmentation
+- [ ] In residual network, add raw value first or dropout first

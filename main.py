@@ -36,7 +36,6 @@ class Runner(object):
             Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(device)
             p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
             y1, y2 = y1.to(device), y2.to(device)
-            # TODO: test for cross entropy: raw is nll_loss
             loss1 = self.loss(p1, y1)
             loss2 = self.loss(p2, y2)
             loss = torch.mean(loss1 + loss2)
