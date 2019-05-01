@@ -313,6 +313,7 @@ class QANet(nn.Module):
         C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
         stacked_model_output1 = self.cq_resizer(CQ_attention)
+        stacked_model_output1 = F.relu(stacked_model_output1)
         for enc in self.model_encoder:
             stacked_model_output1 = enc(stacked_model_output1, cmask)
         stacked_model_output2 = stacked_model_output1
