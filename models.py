@@ -46,6 +46,7 @@ class Embedding(nn.Module):
     def __init__(self, wemb_dim, cemb_dim):
         super().__init__()
         self.conv2d = nn.Conv2d(cemb_dim, cemb_dim, kernel_size=(1, 5), padding=0, bias=True)
+        nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
         self.highway = Highway(2, wemb_dim + cemb_dim)
 
     def forward(self, cemb: torch.Tensor, wemb: torch.Tensor):
@@ -55,8 +56,10 @@ class Embedding(nn.Module):
         cemb = F.relu(cemb)
         cemb, _ = torch.max(cemb, dim=3)
         # cemb = F.dropout(cemb, p=config.CHAR_EMBEDDING_DROPOUT, training=self.training)
+
         wemb = F.dropout(wemb, p=config.WORD_EMBEDDING_DROPOUT, training=self.training)
         wemb = wemb.transpose(1, 2)
+
         emb = torch.cat((cemb, wemb), dim=1)
         emb = self.highway(emb)
         return emb
@@ -81,23 +84,28 @@ class DepthwiseSeparableConvolution(nn.Module):
 
 class PositionEncoder(nn.Module):
     """
+    copy from https://github.com/tensorflow/tensor2tensor/blob/23bd23b9830059fbc349381b70d9429b5c40a139/tensor2tensor/layers/common_attention.py
     input:
         x: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
     output:
         x: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
     """
 
-    def __init__(self, hidden_size, max_length=512):
+    def __init__(self, hidden_size, max_length=512, min_timescale=1.0, max_timescale=1.0e4, ):
         super(PositionEncoder, self).__init__()
-        position = torch.arange(0, max_length).to(device).unsqueeze(1).float()
-        div_term = torch.tensor([10000 ** (2 * i / hidden_size) for i in range(0, hidden_size // 2)]).to(device)
-        self.position_encoding = torch.zeros(max_length, hidden_size, requires_grad=False).to(device)
-        self.position_encoding[:, 0::2] = torch.sin(position[:, ] * div_term)
-        self.position_encoding[:, 1::2] = torch.cos(position[:, ] * div_term)
-        self.position_encoding = self.position_encoding.transpose(0, 1)
+        position = torch.arange(max_length).float()
+        num_timescales = hidden_size // 2
+        log_timescale_increment = (math.log(float(max_timescale) / float(min_timescale)) / (float(num_timescales) - 1))
+        inv_timescales = min_timescale * torch.exp(torch.arange(num_timescales).float() * -log_timescale_increment)
+        scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
+        self.signal = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), dim=1)
+        self.signal = nn.ZeroPad2d((0, (hidden_size % 2), 0, 0))(self.signal)
+        self.signal = self.signal.view(1, max_length, hidden_size).to(device)
 
     def forward(self, x):
-        x = x + self.position_encoding[:, :x.shape[-1]]
+        x = x.transpose(1, 2)
+        x += self.signal[:, :x.shape[1], :]
+        x = x.transpose(1, 2)
         return x
 
 
@@ -190,7 +198,6 @@ class EncoderBlock(nn.Module):
         x = self.attention_layer_normalization(x.transpose(1, 2)).transpose(1, 2)
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = self.self_attention(x, mask)
-        # TODO add input first or dropout first
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = raw + x
 
@@ -199,7 +206,6 @@ class EncoderBlock(nn.Module):
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = self.feedforward(x.transpose(1, 2)).transpose(1, 2)
         x = F.relu(x)
-        # TODO add input first or dropout first
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = raw + x
         return x
@@ -235,11 +241,11 @@ class CQAttention(nn.Module):
         # calculate S
         S = torch.matmul(torch.cat((Ct, Qt, CQ), dim=3), self.line_project)  # trilinear function
         # context-wise softmax (one context word to every question word)
-        S_row_normalized = F.softmax(mask_logits(S, qmask), dim=2)
+        S_row_sofmax = F.softmax(mask_logits(S, qmask), dim=2)
         # question-wise softmax (one question word to every context word)
-        S_column_normalized = F.softmax(mask_logits(S, cmask), dim=1)
-        A = torch.bmm(S_row_normalized, Q)
-        B = torch.bmm(torch.bmm(S_row_normalized, S_column_normalized.transpose(1, 2)), C)
+        S_column_softmax = F.softmax(mask_logits(S, cmask), dim=1)
+        A = torch.bmm(S_row_sofmax, Q)
+        B = torch.bmm(torch.bmm(S_row_sofmax, S_column_softmax.transpose(1, 2)), C)
         output = torch.cat((C, A, torch.mul(C, A), torch.mul(C, B)), dim=2)
         output = F.dropout(output, p=config.LAYERS_DROPOUT, training=self.training)
         output = output.transpose(1, 2)
@@ -283,6 +289,7 @@ class QANet(nn.Module):
             in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
             out_channels=config.HIDDEN_SIZE, kernel_size=1
         )
+        nn.init.kaiming_normal_(self.embedding_resizer.weight, nonlinearity='relu')
         self.embedding_encoder = EncoderBlock(convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
                                               hidden_size=config.HIDDEN_SIZE,
                                               kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
@@ -302,6 +309,7 @@ class QANet(nn.Module):
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
         C, Q = self.embedding_resizer(C), self.embedding_resizer(Q)
+        C, Q = F.relu(C), F.relu(Q)
         C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
         stacked_model_output1 = self.cq_resizer(CQ_attention)
