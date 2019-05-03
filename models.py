@@ -21,13 +21,16 @@ class Highway(nn.Module):
         self.n = layer_number
         self.linear = nn.ModuleList([nn.Linear(output_length, output_length) for _ in range(self.n)])
         self.gate = nn.ModuleList([nn.Linear(output_length, output_length) for _ in range(self.n)])
+        for linear, gate in zip(self.linear, self.gate):
+            nn.init.kaiming_normal_(linear.weight)
+            nn.init.kaiming_normal_(gate.weight)
 
     def forward(self, x):
         x = x.transpose(1, 2)
         for linear, gate in zip(self.linear, self.gate):
             gate = torch.sigmoid(gate(x))
             output = linear(x)
-            output = F.relu(output)
+            # output = F.relu(output)
             output = F.dropout(output, p=config.LAYERS_DROPOUT, training=self.training)
             x = gate * output + (1 - gate) * x
         x = x.transpose(1, 2)
@@ -46,6 +49,7 @@ class Embedding(nn.Module):
     def __init__(self, wemb_dim, cemb_dim):
         super().__init__()
         self.conv2d = nn.Conv2d(cemb_dim, cemb_dim, kernel_size=(1, 5))
+        nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
         self.highway = Highway(2, wemb_dim + cemb_dim)
 
     def forward(self, cemb: torch.Tensor, wemb: torch.Tensor):
@@ -181,6 +185,7 @@ class EncoderBlock(nn.Module):
         self.self_attention = MultiHeadAttention(hidden_size, head_number)
         self.feedforward_layer_normalization = nn.LayerNorm(hidden_size)
         self.feedforward = nn.Linear(hidden_size, hidden_size)
+        nn.init.kaiming_normal_(self.feedforward.weight, nonlinearity='relu')
 
     def forward(self, x, mask):
         x = self.position_encoder(x)
@@ -224,7 +229,10 @@ class CQAttention(nn.Module):
 
     def __init__(self, hidden_size):
         super().__init__()
-        self.line_project = nn.Parameter(torch.empty(hidden_size * 3))
+        self.line_project = torch.empty(hidden_size * 3)
+        lim = 1 / hidden_size
+        nn.init.uniform_(self.line_project, -math.sqrt(lim), math.sqrt(lim))
+        self.line_project = nn.Parameter(self.line_project)
 
     def forward(self, C, Q, cmask, qmask):
         # calculate CQ similarity
@@ -255,8 +263,13 @@ class CQAttention(nn.Module):
 class OutputLayer(nn.Module):
     def __init__(self, hidden_size):
         super(OutputLayer, self).__init__()
-        self.weight1 = nn.Parameter(torch.empty(hidden_size * 2))
-        self.weight2 = nn.Parameter(torch.empty(hidden_size * 2))
+        self.weight1 = torch.empty(hidden_size * 2)
+        self.weight2 = torch.empty(hidden_size * 2)
+        lim = 3 / (2 * hidden_size)
+        nn.init.uniform_(self.weight1, -math.sqrt(lim), math.sqrt(lim))
+        nn.init.uniform_(self.weight2, -math.sqrt(lim), math.sqrt(lim))
+        self.weight1 = nn.Parameter(self.weight1)
+        self.weight2 = nn.Parameter(self.weight2)
 
     def forward(self, stacked_model_output1, stacked_model_output2, stacked_model_output3, cmask):
         start = torch.cat((stacked_model_output1, stacked_model_output2), dim=1)
