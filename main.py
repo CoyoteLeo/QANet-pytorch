@@ -29,7 +29,6 @@ class Runner(object):
     def _train(self, model: nn.Module, optimizer: optim.Adam, scheduler: LambdaLR, ema: EMA, dataset: SQuADDataset,
                start: int, length: int):
         model.train()
-        losses = []
         for i in tqdm(range(start, length + start), total=length):
             optimizer.zero_grad()
             Cwid, Ccid, Qwid, Qcid, y1, y2, ids = dataset[i]
@@ -40,7 +39,6 @@ class Runner(object):
             loss2 = self.loss(p2, y2)
             loss = torch.mean(loss1 + loss2)
             loss.backward()
-            losses.append(loss.item())
             optimizer.step()
             scheduler.step()
             for name, p in model.named_parameters():
@@ -124,16 +122,16 @@ class Runner(object):
             metrics = self._test(model, train_dataset, train_eval_file, step=iter, mode="validate")
             print("Learning rate: {}\n".format(scheduler.get_lr()))
 
-            # TODO skip earlystopping
-            # dev_f1 = metrics["f1"]
-            # dev_em = metrics["exact_match"]
-            # if dev_f1 < best_f1 and dev_em < best_em:
-            #     patience += 1
-            #     if patience > config.EARLY_STOP: break
-            # else:
-            #     patience = 0
-            #     best_f1 = max(best_f1, dev_f1)
-            #     best_em = max(best_em, dev_em)
+            f1 = metrics["f1"]
+            em = metrics["exact_match"]
+            if f1 < best_f1 and em < best_em:
+                patience += 1
+                if patience > config.EARLY_STOP:
+                    break
+            else:
+                patience = 0
+                best_f1 = max(best_f1, f1)
+                best_em = max(best_em, em)
 
             torch.save(model, os.path.join(self.dir, "model.pt"))
 

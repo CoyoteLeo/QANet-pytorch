@@ -45,8 +45,7 @@ class Embedding(nn.Module):
 
     def __init__(self, wemb_dim, cemb_dim):
         super().__init__()
-        self.conv2d = nn.Conv2d(cemb_dim, cemb_dim, kernel_size=(1, 5), padding=0, bias=True)
-        nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
+        self.conv2d = nn.Conv2d(cemb_dim, cemb_dim, kernel_size=(1, 5))
         self.highway = Highway(2, wemb_dim + cemb_dim)
 
     def forward(self, cemb: torch.Tensor, wemb: torch.Tensor):
@@ -68,18 +67,19 @@ class Embedding(nn.Module):
 class DepthwiseSeparableConvolution(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, activation=F.relu):
         super(DepthwiseSeparableConvolution, self).__init__()
-        self.depthwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=out_channels,
+        self.depthwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=in_channels,
                                                kernel_size=kernel_size, padding=kernel_size // 2, groups=in_channels,
-                                               bias=bias)
+                                               bias=False)
         self.pointwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=out_channels,
-                                               kernel_size=1, bias=True)
+                                               kernel_size=1, bias=bias)
         self.activation = activation
 
     def forward(self, x):
-        y = self.pointwise_convolution(self.depthwise_convolution(x))
+        x = self.depthwise_convolution(x)
+        x = self.pointwise_convolution(x)
         if self.activation:
-            y = self.activation(y)
-        return y
+            x = self.activation(x)
+        return x
 
 
 class PositionEncoder(nn.Module):
@@ -289,13 +289,14 @@ class QANet(nn.Module):
             in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
             out_channels=config.HIDDEN_SIZE, kernel_size=1
         )
-        nn.init.kaiming_normal_(self.embedding_resizer.weight, nonlinearity='relu')
+        nn.init.kaiming_normal_(self.embedding_resizer.weight)
         self.embedding_encoder = EncoderBlock(convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
                                               hidden_size=config.HIDDEN_SIZE,
                                               kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
                                               )
         self.cq_attention = CQAttention(hidden_size=config.HIDDEN_SIZE)
         self.cq_resizer = nn.Conv1d(in_channels=config.HIDDEN_SIZE * 4, out_channels=config.HIDDEN_SIZE, kernel_size=1)
+        nn.init.kaiming_normal_(self.cq_resizer.weight)
         output_encoder_block = EncoderBlock(convolution_number=config.MODEL_ENCODER_CONVOLUTION_NUMBER,
                                             hidden_size=config.HIDDEN_SIZE,
                                             kernel_size=config.MODEL_ENCODER_CONVOLUTION_KERNEL_SIZE)
