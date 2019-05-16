@@ -122,7 +122,7 @@ class Runner(object):
         for iter in range(0, config.STEPS, config.CHECKPOINT):
             self._train(model=model, optimizer=optimizer, scheduler=scheduler, ema=ema, dataset=train_dataset,
                         start=iter, length=config.CHECKPOINT)
-            metrics = self._test(model, train_dataset, train_eval_file, step=iter, mode="validate")
+            metrics = self._test(model, dev_dataset, dev_eval_file, step=iter, mode="test")
             print("Learning rate: {}\n".format(scheduler.get_lr()))
 
             f1 = metrics["f1"]
@@ -137,6 +137,8 @@ class Runner(object):
                 best_em = max(best_em, em)
 
             torch.save(model, os.path.join(self.dir, "model.pt"))
+
+        print(f"Best Score: F1 {format(best_f1, '.8f')} | EM {format(best_em, '.8f')}")
 
     def test(self):
         with open(os.path.join(self.dir, config.DEV_EVAL_FILE), "r") as f:
