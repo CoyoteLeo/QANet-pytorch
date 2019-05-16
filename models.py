@@ -22,15 +22,15 @@ class Highway(nn.Module):
         self.linear = nn.ModuleList([nn.Linear(output_length, output_length) for _ in range(self.n)])
         self.gate = nn.ModuleList([nn.Linear(output_length, output_length) for _ in range(self.n)])
         for linear, gate in zip(self.linear, self.gate):
-            nn.init.kaiming_normal_(linear.weight)
-            nn.init.kaiming_normal_(gate.weight)
+            nn.init.kaiming_normal_(linear.weight, nonlinearity='relu')
+            nn.init.kaiming_normal_(gate.weight, nonlinearity='relu')
 
     def forward(self, x):
         x = x.transpose(1, 2)
         for linear, gate in zip(self.linear, self.gate):
             gate = torch.sigmoid(gate(x))
             output = linear(x)
-            # output = F.relu(output)
+            output = F.relu(output)
             output = F.dropout(output, p=config.LAYERS_DROPOUT, training=self.training)
             x = gate * output + (1 - gate) * x
         x = x.transpose(1, 2)
@@ -58,7 +58,6 @@ class Embedding(nn.Module):
         cemb = self.conv2d(cemb)
         cemb = F.relu(cemb)
         cemb, _ = torch.max(cemb, dim=3)
-        # cemb = F.dropout(cemb, p=config.CHAR_EMBEDDING_DROPOUT, training=self.training)
 
         wemb = F.dropout(wemb, p=config.WORD_EMBEDDING_DROPOUT, training=self.training)
         wemb = wemb.transpose(1, 2)
@@ -74,7 +73,7 @@ class DepthwiseSeparableConvolution(nn.Module):
         self.depthwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=in_channels,
                                                kernel_size=kernel_size, padding=kernel_size // 2, groups=in_channels,
                                                bias=False)
-        self.pointwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=out_channels,
+        self.pointwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=out_channels, padding=0,
                                                kernel_size=1, bias=bias)
         self.activation = activation
 
@@ -115,7 +114,8 @@ class PositionEncoder(nn.Module):
 
 # TODO trace mask
 def mask_logits(target, mask):
-    return target * (1 - mask) + mask * (-1e30)
+    mask = mask.type(torch.float32)
+    return target + (-1e30) * (1 - mask)
 
 
 class MultiHeadAttention(nn.Module):
@@ -130,9 +130,9 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.head_number = head_number
         self.dim_per_head = hidden_size // head_number
-        self.q_linear = nn.Linear(hidden_size, hidden_size)  # 8 * Wq
-        self.v_linear = nn.Linear(hidden_size, hidden_size)  # 8 * Wv
-        self.k_linear = nn.Linear(hidden_size, hidden_size)  # 8 * Wk
+        self.q_linear = nn.Linear(hidden_size, self.dim_per_head * self.head_number)  # 8 * Wq
+        self.v_linear = nn.Linear(hidden_size, self.dim_per_head * self.head_number)  # 8 * Wv
+        self.k_linear = nn.Linear(hidden_size, self.dim_per_head * self.head_number)  # 8 * Wk
         self.dropout = nn.Dropout(config.LAYERS_DROPOUT)
         self.linear_project = nn.Linear(hidden_size, hidden_size)
         self.dim_sqrt_invert = 1 / math.sqrt(self.dim_per_head)
@@ -189,13 +189,11 @@ class EncoderBlock(nn.Module):
 
     def forward(self, x, mask):
         x = self.position_encoder(x)
-        # x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
-        for i, (conv, norm) in enumerate(zip(self.convolution_list, self.layer_normalization_list)):
+        for i in range(self.convolution_number):
             raw = x
-            x = norm(x.transpose(1, 2)).transpose(1, 2)
+            x = self.layer_normalization_list[i](x.transpose(1, 2)).transpose(1, 2)
             x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
-            x = conv(x)
-            # TODO dropout probability
+            x = self.convolution_list[i](x)
             x = F.dropout(x, config.LAYERS_DROPOUT * (i + 1) / self.convolution_number, training=self.training)
             x = raw + x
 
@@ -230,8 +228,7 @@ class CQAttention(nn.Module):
     def __init__(self, hidden_size):
         super().__init__()
         self.line_project = torch.empty(hidden_size * 3)
-        lim = 1 / hidden_size
-        nn.init.uniform_(self.line_project, -math.sqrt(lim), math.sqrt(lim))
+        nn.init.uniform_(self.line_project)
         self.line_project = nn.Parameter(self.line_project)
 
     def forward(self, C, Q, cmask, qmask):
@@ -265,9 +262,8 @@ class OutputLayer(nn.Module):
         super(OutputLayer, self).__init__()
         self.weight1 = torch.empty(hidden_size * 2)
         self.weight2 = torch.empty(hidden_size * 2)
-        lim = 3 / (2 * hidden_size)
-        nn.init.uniform_(self.weight1, -math.sqrt(lim), math.sqrt(lim))
-        nn.init.uniform_(self.weight2, -math.sqrt(lim), math.sqrt(lim))
+        nn.init.uniform_(self.weight1)
+        nn.init.uniform_(self.weight2)
         self.weight1 = nn.Parameter(self.weight1)
         self.weight2 = nn.Parameter(self.weight2)
 
@@ -302,14 +298,12 @@ class QANet(nn.Module):
             in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
             out_channels=config.HIDDEN_SIZE, kernel_size=1
         )
-        nn.init.kaiming_normal_(self.embedding_resizer.weight)
         self.embedding_encoder = EncoderBlock(convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
                                               hidden_size=config.HIDDEN_SIZE,
                                               kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
                                               )
         self.cq_attention = CQAttention(hidden_size=config.HIDDEN_SIZE)
         self.cq_resizer = nn.Conv1d(in_channels=config.HIDDEN_SIZE * 4, out_channels=config.HIDDEN_SIZE, kernel_size=1)
-        nn.init.kaiming_normal_(self.cq_resizer.weight)
         output_encoder_block = EncoderBlock(convolution_number=config.MODEL_ENCODER_CONVOLUTION_NUMBER,
                                             hidden_size=config.HIDDEN_SIZE,
                                             kernel_size=config.MODEL_ENCODER_CONVOLUTION_KERNEL_SIZE)
@@ -317,24 +311,24 @@ class QANet(nn.Module):
         self.output = OutputLayer(hidden_size=config.HIDDEN_SIZE)
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
-        cmask = (torch.zeros_like(Cwid) == Cwid).float()
-        qmask = (torch.zeros_like(Qwid) == Qwid).float()
+        cmask = (torch.zeros_like(Cwid) != Cwid).float()
+        qmask = (torch.zeros_like(Qwid) != Qwid).float()
         Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
         C, Q = self.embedding_resizer(C), self.embedding_resizer(Q)
-        C, Q = F.relu(C), F.relu(Q)
         C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
-        stacked_model_output1 = self.cq_resizer(CQ_attention)
-        stacked_model_output1 = F.relu(stacked_model_output1)
+        stacked_model_input = self.cq_resizer(CQ_attention)
+        stacked_model_input = F.dropout(stacked_model_input, p=config.LAYERS_DROPOUT, training=self.training)
         for enc in self.model_encoder:
-            stacked_model_output1 = enc(stacked_model_output1, cmask)
-        stacked_model_output2 = stacked_model_output1
+            stacked_model_input = enc(stacked_model_input, cmask)
+        stacked_model_output1 = stacked_model_input
         for enc in self.model_encoder:
-            stacked_model_output2 = enc(stacked_model_output2, cmask)
-        stacked_model_output3 = stacked_model_output2
+            stacked_model_input = enc(stacked_model_input, cmask)
+        stacked_model_output2 = stacked_model_input
         for enc in self.model_encoder:
-            stacked_model_output3 = enc(stacked_model_output3, cmask)
+            stacked_model_input = enc(stacked_model_input, cmask)
+        stacked_model_output3 = stacked_model_input
         start, end = self.output(stacked_model_output1, stacked_model_output2, stacked_model_output3, cmask)
         return start, end

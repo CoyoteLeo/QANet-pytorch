@@ -37,8 +37,10 @@ class Runner(object):
             y1, y2 = y1.to(device), y2.to(device)
             loss1 = self.loss(p1, y1)
             loss2 = self.loss(p2, y2)
-            loss = torch.mean(loss1 + loss2)
+            # loss = torch.mean(loss1 + loss2)
+            loss = loss1 + loss2
             loss.backward()
+            torch.nn.utils.clip_grad_value_(model.parameters(), config.grad_clip)
             optimizer.step()
             scheduler.step()
             for name, p in model.named_parameters():
@@ -64,7 +66,8 @@ class Runner(object):
                 y1, y2 = y1.to(device), y2.to(device)
                 loss1 = self.loss(p1, y1)
                 loss2 = self.loss(p2, y2)
-                loss = torch.mean(loss1 + loss2)
+                # loss = torch.mean(loss1 + loss2)
+                loss = loss1 + loss2
                 losses.append(loss.item())
 
                 yp1 = torch.argmax(p1, 1)
@@ -109,10 +112,10 @@ class Runner(object):
         optimizer = optim.Adam(filter(lambda param: param.requires_grad, model.parameters()),
                                lr=config.BASE_LR, betas=(config.ADAM_BETA1, config.ADAM_BETA2), eps=1e-8,
                                weight_decay=3e-7)
-        cr = config.LR / math.log(config.LR_WARM_UP_STEPS)
+        cr = config.LR / math.log2(config.LR_WARM_UP_STEPS)
         scheduler = optim.lr_scheduler.LambdaLR(
             optimizer,
-            lr_lambda=lambda epoch: cr * math.log(epoch + 1) if epoch < config.LR_WARM_UP_STEPS else config.LR
+            lr_lambda=lambda epoch: cr * math.log2(epoch + 1) if epoch < config.LR_WARM_UP_STEPS else config.LR
         )
 
         best_f1 = best_em = patience = 0
