@@ -122,6 +122,7 @@ class Runner(object):
         for iter in range(0, config.STEPS, config.CHECKPOINT):
             self._train(model=model, optimizer=optimizer, scheduler=scheduler, ema=ema, dataset=train_dataset,
                         start=iter, length=config.CHECKPOINT)
+            self._test(model, train_dataset, train_eval_file, step=iter, mode="validation")
             metrics = self._test(model, dev_dataset, dev_eval_file, step=iter, mode="test")
             print("Learning rate: {}\n".format(scheduler.get_lr()))
 
