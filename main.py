@@ -51,7 +51,7 @@ class Runner(object):
         model.eval()
         answer_dict = {}
         losses = []
-        if mode == "test":
+        if mode != "test":
             iterator = tqdm(random.sample(range(0, len(dataset)), config.VALIDATION_STEPS),
                             total=config.VALIDATION_STEPS)
         else:
@@ -100,7 +100,7 @@ class Runner(object):
             dev_eval_file = json.load(f)
 
         train_dataset = SQuADDataset(os.path.join(self.dir, config.TRAIN_RECORD_FILE), config.STEPS, config.BATCH_SIZE)
-        dev_dataset = SQuADDataset(os.path.join(self.dir, config.TRAIN_RECORD_FILE), config.TEST_STEPS,
+        dev_dataset = SQuADDataset(os.path.join(self.dir, config.DEV_RECORD_FILE), config.TEST_STEPS,
                                    config.BATCH_SIZE)
 
         model = QANet(word_mat, char_mat).to(device)
