@@ -19,7 +19,9 @@ class Highway(nn.Module):
     def __init__(self, layer_number, output_length):
         super().__init__()
         self.n = layer_number
-        self.linear = nn.ModuleList([nn.Linear(output_length, output_length) for _ in range(self.n)])
+        self.linear = nn.ModuleList(
+            [nn.Linear(output_length, output_length) for _ in range(self.n)]
+        )
         self.gate = nn.ModuleList([nn.Linear(output_length, output_length) for _ in range(self.n)])
         for linear, gate in zip(self.linear, self.gate):
             nn.init.kaiming_normal_(linear.weight, nonlinearity='relu')
@@ -70,11 +72,21 @@ class Embedding(nn.Module):
 class DepthwiseSeparableConvolution(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, activation=F.relu):
         super(DepthwiseSeparableConvolution, self).__init__()
-        self.depthwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=in_channels,
-                                               kernel_size=kernel_size, padding=kernel_size // 2, groups=in_channels,
-                                               bias=False)
-        self.pointwise_convolution = nn.Conv1d(in_channels=in_channels, out_channels=out_channels, padding=0,
-                                               kernel_size=1, bias=bias)
+        self.depthwise_convolution = nn.Conv1d(
+            in_channels=in_channels,
+            out_channels=in_channels,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            groups=in_channels,
+            bias=False
+        )
+        self.pointwise_convolution = nn.Conv1d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            padding=0,
+            kernel_size=1,
+            bias=bias
+        )
         self.activation = activation
 
     def forward(self, x):
@@ -98,8 +110,11 @@ class PositionEncoder(nn.Module):
         super(PositionEncoder, self).__init__()
         position = torch.arange(max_length).float()
         num_timescales = hidden_size // 2
-        log_timescale_increment = (math.log(float(max_timescale) / float(min_timescale)) / (float(num_timescales) - 1))
-        inv_timescales = min_timescale * torch.exp(torch.arange(num_timescales).float() * -log_timescale_increment)
+        log_timescale_increment = (math.log(float(max_timescale) / float(min_timescale)) / (
+                float(num_timescales) - 1))
+        inv_timescales = min_timescale * torch.exp(
+            torch.arange(num_timescales).float() * -log_timescale_increment
+        )
         scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
         self.signal = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), dim=1)
         self.signal = nn.ZeroPad2d((0, (hidden_size % 2), 0, 0))(self.signal)
@@ -146,9 +161,12 @@ class MultiHeadAttention(nn.Module):
                                   self.dim_per_head)  # project to eight multihead matrix
         v = self.v_linear(x).view(batch_size, length, self.head_number,
                                   self.dim_per_head)  # project to eight multihead matrix
-        q = q.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
-        k = k.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
-        v = v.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length, self.dim_per_head)
+        q = q.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length,
+                                                    self.dim_per_head)
+        k = k.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length,
+                                                    self.dim_per_head)
+        v = v.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length,
+                                                    self.dim_per_head)
         mask = mask.unsqueeze(1).expand(-1, length, -1).repeat(self.head_number, 1, 1)
         attention = torch.bmm(q, k.transpose(1, 2)) * self.dim_sqrt_invert
         attention = mask_logits(attention, mask)
@@ -156,7 +174,8 @@ class MultiHeadAttention(nn.Module):
         attention = self.dropout(attention)
         attention = torch.bmm(attention, v)
         attention = attention.view((self.head_number, batch_size, length, self.dim_per_head)) \
-            .permute((1, 2, 0, 3)).contiguous().view((batch_size, length, self.dim_per_head * self.head_number))
+            .permute((1, 2, 0, 3)).contiguous().view(
+            (batch_size, length, self.dim_per_head * self.head_number))
         attention = self.linear_project(attention)
         attention = self.dropout(attention)
         attention = attention.transpose(1, 2)
@@ -180,7 +199,9 @@ class EncoderBlock(nn.Module):
             [DepthwiseSeparableConvolution(hidden_size, hidden_size, kernel_size)
              for _ in range(convolution_number)]
         )
-        self.layer_normalization_list = nn.ModuleList([nn.LayerNorm(hidden_size) for _ in range(convolution_number)])
+        self.layer_normalization_list = nn.ModuleList(
+            [nn.LayerNorm(hidden_size) for _ in range(convolution_number)]
+        )
         self.attention_layer_normalization = nn.LayerNorm(hidden_size)
         self.self_attention = MultiHeadAttention(hidden_size, head_number)
         self.feedforward_layer_normalization = nn.LayerNorm(hidden_size)
@@ -194,7 +215,8 @@ class EncoderBlock(nn.Module):
             x = self.layer_normalization_list[i](x.transpose(1, 2)).transpose(1, 2)
             x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
             x = self.convolution_list[i](x)
-            x = F.dropout(x, config.LAYERS_DROPOUT * (i + 1) / self.convolution_number, training=self.training)
+            x = F.dropout(x, config.LAYERS_DROPOUT * (i + 1) / self.convolution_number,
+                          training=self.training)
             x = raw + x
 
         raw = x
@@ -298,16 +320,20 @@ class QANet(nn.Module):
             in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
             out_channels=config.HIDDEN_SIZE, kernel_size=1
         )
-        self.embedding_encoder = EncoderBlock(convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
-                                              hidden_size=config.HIDDEN_SIZE,
-                                              kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
-                                              )
+        self.embedding_encoder = EncoderBlock(
+            convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
+            hidden_size=config.HIDDEN_SIZE,
+            kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
+        )
         self.cq_attention = CQAttention(hidden_size=config.HIDDEN_SIZE)
-        self.cq_resizer = nn.Conv1d(in_channels=config.HIDDEN_SIZE * 4, out_channels=config.HIDDEN_SIZE, kernel_size=1)
-        output_encoder_block = EncoderBlock(convolution_number=config.MODEL_ENCODER_CONVOLUTION_NUMBER,
-                                            hidden_size=config.HIDDEN_SIZE,
-                                            kernel_size=config.MODEL_ENCODER_CONVOLUTION_KERNEL_SIZE)
-        self.model_encoder = nn.ModuleList([output_encoder_block for _ in range(config.MODEL_ENCODER_BLOCK_NUMBER)])
+        self.cq_resizer = nn.Conv1d(in_channels=config.HIDDEN_SIZE * 4,
+                                    out_channels=config.HIDDEN_SIZE, kernel_size=1)
+        output_encoder_block = EncoderBlock(
+            convolution_number=config.MODEL_ENCODER_CONVOLUTION_NUMBER,
+            hidden_size=config.HIDDEN_SIZE,
+            kernel_size=config.MODEL_ENCODER_CONVOLUTION_KERNEL_SIZE)
+        self.model_encoder = nn.ModuleList(
+            [output_encoder_block for _ in range(config.MODEL_ENCODER_BLOCK_NUMBER)])
         self.output = OutputLayer(hidden_size=config.HIDDEN_SIZE)
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
@@ -320,7 +346,8 @@ class QANet(nn.Module):
         C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
         stacked_model_input = self.cq_resizer(CQ_attention)
-        stacked_model_input = F.dropout(stacked_model_input, p=config.LAYERS_DROPOUT, training=self.training)
+        stacked_model_input = F.dropout(stacked_model_input, p=config.LAYERS_DROPOUT,
+                                        training=self.training)
         for enc in self.model_encoder:
             stacked_model_input = enc(stacked_model_input, cmask)
         stacked_model_output1 = stacked_model_input
@@ -330,5 +357,6 @@ class QANet(nn.Module):
         for enc in self.model_encoder:
             stacked_model_input = enc(stacked_model_input, cmask)
         stacked_model_output3 = stacked_model_input
-        start, end = self.output(stacked_model_output1, stacked_model_output2, stacked_model_output3, cmask)
+        start, end = self.output(stacked_model_output1, stacked_model_output2,
+                                 stacked_model_output3, cmask)
         return start, end
