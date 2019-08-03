@@ -26,13 +26,14 @@ class Runner(object):
         self.dir = os.path.join(config.SQUAD_DIR, squad_version)
         self.loss = loss
 
-    def _train(self, model: nn.Module, optimizer: optim.Adam, scheduler: LambdaLR, ema: EMA, dataset: SQuADDataset,
-               start: int, length: int):
+    def _train(self, model: nn.Module, optimizer: optim.Adam, scheduler: LambdaLR, ema: EMA,
+               dataset: SQuADDataset, start: int, length: int):
         model.train()
         for i in tqdm(range(start, length + start), total=length):
             optimizer.zero_grad()
             Cwid, Ccid, Qwid, Qcid, y1, y2, ids = dataset[i]
-            Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(device)
+            Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(
+                device)
             p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
             y1, y2 = y1.to(device), y2.to(device)
             loss1 = self.loss(p1, y1)
@@ -47,7 +48,8 @@ class Runner(object):
                 if p.requires_grad:
                     ema.update_parameter(name, p)
 
-    def _test(self, model: nn.Module, dataset: SQuADDataset, eval_file: dict, step=None, mode: str = 'test'):
+    def _test(self, model: nn.Module, dataset: SQuADDataset, eval_file: dict, step=None,
+              mode: str = 'test'):
         model.eval()
         answer_dict = {}
         losses = []
@@ -61,7 +63,8 @@ class Runner(object):
         with torch.no_grad():
             for i in iterator:
                 Cwid, Ccid, Qwid, Qcid, y1, y2, ids = dataset[i]
-                Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(device)
+                Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(
+                    device)
                 p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
                 y1, y2 = y1.to(device), y2.to(device)
                 loss1 = self.loss(p1, y1)
@@ -99,9 +102,10 @@ class Runner(object):
         with open(os.path.join(self.dir, config.DEV_EVAL_FILE), "r") as f:
             dev_eval_file = json.load(f)
 
-        train_dataset = SQuADDataset(os.path.join(self.dir, config.TRAIN_RECORD_FILE), config.STEPS, config.BATCH_SIZE)
-        dev_dataset = SQuADDataset(os.path.join(self.dir, config.DEV_RECORD_FILE), config.TEST_STEPS,
-                                   config.BATCH_SIZE)
+        train_dataset = SQuADDataset(os.path.join(self.dir, config.TRAIN_RECORD_FILE), config.STEPS,
+                                     config.BATCH_SIZE)
+        dev_dataset = SQuADDataset(os.path.join(self.dir, config.DEV_RECORD_FILE),
+                                   config.TEST_STEPS, config.BATCH_SIZE)
 
         model = QANet(word_mat, char_mat).to(device)
         ema = EMA(config.EMA_DECAY)
@@ -110,19 +114,19 @@ class Runner(object):
                 ema.set(name, p)
 
         optimizer = optim.Adam(filter(lambda param: param.requires_grad, model.parameters()),
-                               lr=config.BASE_LR, betas=(config.ADAM_BETA1, config.ADAM_BETA2), eps=1e-8,
-                               weight_decay=3e-7)
+                               lr=config.BASE_LR, betas=(config.ADAM_BETA1, config.ADAM_BETA2),
+                               eps=1e-8, weight_decay=3e-7)
         cr = config.LR / math.log2(config.LR_WARM_UP_STEPS)
         scheduler = optim.lr_scheduler.LambdaLR(
             optimizer,
-            lr_lambda=lambda epoch: cr * math.log2(epoch + 1) if epoch < config.LR_WARM_UP_STEPS else config.LR
+            lr_lambda=lambda epoch: cr * math.log2(
+                epoch + 1) if epoch < config.LR_WARM_UP_STEPS else config.LR
         )
 
         best_f1 = best_em = patience = 0
         for iter in range(0, config.STEPS, config.CHECKPOINT):
-            self._train(model=model, optimizer=optimizer, scheduler=scheduler, ema=ema, dataset=train_dataset,
-                        start=iter, length=config.CHECKPOINT)
-            self._test(model, train_dataset, train_eval_file, step=iter, mode="validation")
+            self._train(model=model, optimizer=optimizer, scheduler=scheduler, ema=ema,
+                        dataset=train_dataset, start=iter, length=config.CHECKPOINT)
             metrics = self._test(model, dev_dataset, dev_eval_file, step=iter, mode="test")
             print("Learning rate: {}\n".format(scheduler.get_lr()))
 
@@ -144,16 +148,19 @@ class Runner(object):
     def test(self):
         with open(os.path.join(self.dir, config.DEV_EVAL_FILE), "r") as f:
             eval_file = json.load(f)
-        dataset = SQuADDataset(os.path.join(self.dir, config.DEV_RECORD_FILE), -1, config.BATCH_SIZE)
+        dataset = SQuADDataset(os.path.join(self.dir, config.DEV_RECORD_FILE), -1,
+                               config.BATCH_SIZE)
         model = torch.load(os.path.join(self.dir, "model.pt"))
         self._test(model=model, dataset=dataset, eval_file=eval_file, mode="test")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Preprocess data and generate training and testing example')
+    parser = argparse.ArgumentParser(
+        description='Preprocess data and generate training and testing example')
     parser.add_argument('--squad-version', default='v1.1', type=str, dest="squad_version",
                         help=f'please check that you have already preprocessing the correspond squad file')
-    parser.add_argument("--mode", action="store", dest="mode", default="debug", help="train/test/debug")
+    parser.add_argument("--mode", action="store", dest="mode", default="debug",
+                        help="train/test/debug")
     parser = parser.parse_args()
     runner = Runner(squad_version=parser.squad_version, loss=nn.CrossEntropyLoss())
     if parser.mode == "train":

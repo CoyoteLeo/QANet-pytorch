@@ -50,15 +50,18 @@ class SQuAd:
         train_examples, train_eval = self.process_file(os.path.join(self.dir, "dev.json"))
         dev_examples, dev_eval = self.process_file(os.path.join(self.dir, "train.json"))
 
-        word_emb_mat, word2idx_dict = self.get_embedding(self.word_counter, emb_file=config.GLOVE_WORD_REPRESENTATION,
-                                                         vec_size=config.GLOVE_WORD_REPRESENTATION_DIM, emb_type="word")
+        word_emb_mat, word2idx_dict = self.get_embedding(self.word_counter,
+                                                         emb_file=config.GLOVE_WORD_REPRESENTATION,
+                                                         vec_size=config.GLOVE_WORD_REPRESENTATION_DIM,
+                                                         emb_type="word")
         char_emb_mat, char2idx_dict = self.get_embedding(self.char_counter, emb_file=None,
-                                                         vec_size=config.CHAR_REPRESENTATION_DIM, emb_type="char")
+                                                         vec_size=config.CHAR_REPRESENTATION_DIM,
+                                                         emb_type="char")
 
-        self.build_features(os.path.join(self.dir, config.TRAIN_RECORD_FILE), train_examples, word2idx_dict,
-                            char2idx_dict, "train")
-        self.build_features(os.path.join(self.dir, config.DEV_RECORD_FILE), dev_examples, word2idx_dict, char2idx_dict,
-                            "dev")
+        self.build_features(os.path.join(self.dir, config.TRAIN_RECORD_FILE), train_examples,
+                            word2idx_dict, char2idx_dict, "train")
+        self.build_features(os.path.join(self.dir, config.DEV_RECORD_FILE), dev_examples,
+                            word2idx_dict, char2idx_dict, "dev")
 
         save(os.path.join(self.dir, config.WORD_EMB_FILE), word_emb_mat, message="word embedding")
         save(os.path.join(self.dir, config.CHAR_EMB_FILE), char_emb_mat, message="char embedding")
@@ -109,17 +112,27 @@ class SQuAd:
                             y1, y2 = answer_span[0], answer_span[-1]
                             y1s.append(y1)
                             y2s.append(y2)
-                        example = {"context_tokens": context_tokens, "context_chars": context_chars,
-                                   "ques_tokens": ques_tokens, "ques_chars": ques_chars, "y1s": y1s, "y2s": y2s,
-                                   "id": total}
+                        example = {
+                            "context_tokens": context_tokens,
+                            "context_chars": context_chars,
+                            "ques_tokens": ques_tokens,
+                            "ques_chars": ques_chars,
+                            "y1s": y1s,
+                            "y2s": y2s,
+                            "id": total
+                        }
                         examples.append(example)
-                        eval_examples[str(total)] = {"context": context, "spans": spans, "answers": answer_texts,
-                                                     "uuid": qa["id"]}
+                        eval_examples[str(total)] = {
+                            "context": context,
+                            "spans": spans,
+                            "answers": answer_texts,
+                            "uuid": qa["id"]
+                        }
             print(f"{len(examples)} questions in total")
         return examples, eval_examples
 
-    def get_embedding(self, counter: Counter, emb_file: Union[None, str], vec_size: int, emb_type: str,
-                      limit: int = -1) -> Tuple[list, dict]:
+    def get_embedding(self, counter: Counter, emb_file: Union[None, str], vec_size: int,
+                      emb_type: str, limit: int = -1) -> Tuple[list, dict]:
         print(f"Generating {self.version} {emb_type} embedding...")
         embedding_dict = {}
         filtered_elements = [key for key, count in counter.items() if count > limit]
@@ -142,8 +155,10 @@ class SQuAd:
 
         null_token = "--NULL--"
         oov_token = "--OOV--"
-        token2idx_dict = {token: idx for idx, token in
-                          enumerate(embedding_dict.keys(), max(config.NULL_INDEX, config.OOV_INDEX))}
+        token2idx_dict = {
+            token: idx for idx, token in enumerate(embedding_dict.keys(),
+                                                   max(config.NULL_INDEX, config.OOV_INDEX))
+        }
         token2idx_dict[null_token] = config.NULL_INDEX
         token2idx_dict[oov_token] = config.OOV_INDEX
         embedding_dict[null_token] = [0. for _ in range(vec_size)]
@@ -152,7 +167,8 @@ class SQuAd:
         emb_mat = [idx2emb_dict[idx] for idx in range(len(idx2emb_dict))]
         return emb_mat, token2idx_dict
 
-    def build_features(self, out_file: str, examples: list, word2idx_dict: dict, char2idx_dict: dict, data_type: str):
+    def build_features(self, out_file: str, examples: list, word2idx_dict: dict,
+                       char2idx_dict: dict, data_type: str):
         print(f"Processing {self.version} {data_type} examples...")
         para_limit = config.PARA_LIMIT
         ques_limit = config.QUES_LIMIT
@@ -165,7 +181,8 @@ class SQuAd:
                    (qa_example["y2s"][0] - qa_example["y1s"][0]) <= ans_limit
 
         def _get_word(_word):
-            return word2idx_dict.get(_word) or word2idx_dict.get(_word.lower()) or word2idx_dict.get(_word.capitalize()) \
+            return word2idx_dict.get(_word) or word2idx_dict.get(
+                _word.lower()) or word2idx_dict.get(_word.capitalize()) \
                    or word2idx_dict.get(_word.upper(), config.OOV_INDEX)
 
         def _get_char(_char):
@@ -218,26 +235,38 @@ class SQuAd:
             y2s.append(end)
             ids.append(example["id"])
 
-        np.savez(out_file, context_idxs=np.array(context_idxs), context_char_idxs=np.array(context_char_idxs),
-                 ques_idxs=np.array(ques_idxs), ques_char_idxs=np.array(ques_char_idxs), y1s=np.array(y1s),
+        np.savez(out_file, context_idxs=np.array(context_idxs),
+                 context_char_idxs=np.array(context_char_idxs),
+                 ques_idxs=np.array(ques_idxs),
+                 ques_char_idxs=np.array(ques_char_idxs),
+                 y1s=np.array(y1s),
                  y2s=np.array(y2s), ids=np.array(ids))
         print(f"Built {total} / {total_valid} instances of features in total")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Preprocess data and generate training and testing example')
-    parser.add_argument('--squad-version', default='all', type=str, dest="squad_version",
-                        help=f'assign squad version, we support {", ".join(config.ALL_SUPPORT_SQUAD_VERSION)} now'
-                        f' e.g., v1.1 (default: all)')
+    parser = argparse.ArgumentParser(
+        description='Preprocess data and generate training and testing example'
+    )
+
+    parser.add_argument(
+        '--squad-version',
+        default='all',
+        type=str,
+        dest="squad_version",
+        help=f'assign squad version, we support {", ".join(config.ALL_SUPPORT_SQUAD_VERSION)} now'
+        f' e.g., v1.1 (default: all)')
     args = parser.parse_args()
 
     if not os.path.exists(config.GLOVE_WORD_REPRESENTATION):
         raise Exception("please download glove embedding file")
     if args.squad_version not in config.ALL_SUPPORT_SQUAD_VERSION and args.squad_version != "all":
         raise Exception("invalid squad version")
-    versions = config.ALL_SUPPORT_SQUAD_VERSION if args.squad_version == "all" else [args.squad_version]
+    versions = config.ALL_SUPPORT_SQUAD_VERSION if args.squad_version == "all" else [
+        args.squad_version]
     for v in versions:
-        if not all([os.path.exists(os.path.join(config.SQUAD_DIR, v, f)) for f in ["dev.json", "train.json"]]):
+        if not all([os.path.exists(os.path.join(config.SQUAD_DIR, v, f)) for f in
+                    ["dev.json", "train.json"]]):
             raise Exception("please check specify squad version data are downloaded in data folder")
 
     for version in versions:

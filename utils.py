@@ -157,9 +157,10 @@ class Evaluator(object):
             total += 1
             ground_truths = eval_file[key]["answers"]
             prediction = value
-            exact_match += Evaluator.metric_max_over_ground_truths(Evaluator.exact_match_score, prediction,
-                                                                   ground_truths)
-            f1 += Evaluator.metric_max_over_ground_truths(Evaluator.f1_score, prediction, ground_truths)
+            exact_match += Evaluator.metric_max_over_ground_truths(Evaluator.exact_match_score,
+                                                                   prediction, ground_truths)
+            f1 += Evaluator.metric_max_over_ground_truths(Evaluator.f1_score, prediction,
+                                                          ground_truths)
         exact_match = 100.0 * exact_match / total
         f1 = 100.0 * f1 / total
         return {'exact_match': exact_match, 'f1': f1}
