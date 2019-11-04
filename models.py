@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-import config
+from config import config
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -35,7 +35,7 @@ class Highway(nn.Module):
             gate = torch.sigmoid(gate(x))
             output = linear(x)
             output = F.relu(output)
-            output = F.dropout(output, p=config.LAYERS_DROPOUT, training=self.training)
+            output = F.dropout(output, p=config.layer_dropout, training=self.training)
             x = gate * output + (1 - gate) * x
         x = x.transpose(1, 2)
         return x
@@ -59,12 +59,12 @@ class Embedding(nn.Module):
 
     def forward(self, cemb: torch.Tensor, wemb: torch.Tensor):
         cemb = cemb.permute((0, 3, 1, 2))
-        cemb = F.dropout(cemb, p=config.CHAR_EMBEDDING_DROPOUT, training=self.training)
+        cemb = F.dropout(cemb, p=config.char_emb_dropout, training=self.training)
         cemb = self.conv2d(cemb)
         cemb = F.relu(cemb)
         cemb, _ = torch.max(cemb, dim=3)
 
-        wemb = F.dropout(wemb, p=config.WORD_EMBEDDING_DROPOUT, training=self.training)
+        wemb = F.dropout(wemb, p=config.word_emb_dropout, training=self.training)
         wemb = wemb.transpose(1, 2)
 
         emb = torch.cat((cemb, wemb), dim=1)
@@ -150,7 +150,7 @@ class EncoderBlock(nn.Module):
         x: shape [batch_size, hidden_size, max length] => [8, 128, 400]
     """
 
-    def __init__(self, convolution_number, hidden_size, kernel_size, head_number=8):
+    def __init__(self, convolution_number, hidden_size, kernel_size, head_number):
         super(EncoderBlock, self).__init__()
         self.convolution_number = convolution_number
         self.position_encoder = PositionEncoder(hidden_size)
@@ -165,7 +165,7 @@ class EncoderBlock(nn.Module):
         self.attention_layer_normalization = nn.LayerNorm(hidden_size)
 
         self.self_attention = nn.MultiheadAttention(hidden_size, head_number,
-                                                    dropout=config.LAYERS_DROPOUT)
+                                                    dropout=config.layer_dropout)
         self.feedforward_normalization = nn.LayerNorm(hidden_size)
         self.feedforward = nn.Linear(hidden_size, hidden_size)
         nn.init.kaiming_normal_(self.feedforward.weight, nonlinearity='relu')
@@ -175,27 +175,27 @@ class EncoderBlock(nn.Module):
         for i in range(self.convolution_number):
             raw = x
             x = self.convolution_normalization_list[i](x.transpose(1, 2)).transpose(1, 2)
-            x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+            x = F.dropout(x, config.layer_dropout, training=self.training)
             x = self.convolution_list[i](x.cuda())
-            x = F.dropout(x, config.LAYERS_DROPOUT * (i + 1) / self.convolution_number,
+            x = F.dropout(x, config.LAYERS_DRlayer_dropoutOPOUT * (i + 1) / self.convolution_number,
                           training=self.training)
             x = raw + x
 
         raw = x
         x = self.attention_layer_normalization(x.transpose(1, 2)).transpose(1, 2)
-        x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+        x = F.dropout(x, config.layer_dropout, training=self.training)
         x = x.permute(2, 0, 1)
         x, _ = self.self_attention(x, x, x, key_padding_mask=mask.bool())
         x = x.permute(1, 2, 0)
-        x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+        x = F.dropout(x, config.layer_dropout, training=self.training)
         x = raw + x
 
         raw = x
         x = self.feedforward_normalization(x.transpose(1, 2)).transpose(1, 2)
-        x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+        x = F.dropout(x, config.layer_dropout, training=self.training)
         x = self.feedforward(x.transpose(1, 2)).transpose(1, 2)
         x = F.relu(x)
-        x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
+        x = F.dropout(x, config.layer_dropout, training=self.training)
         x = raw + x
         return x
 
@@ -242,7 +242,7 @@ class CQAttention(nn.Module):
         A = torch.bmm(S_row_sofmax, Q)
         B = torch.bmm(torch.bmm(S_row_sofmax, S_column_softmax.transpose(1, 2)), C)
         output = torch.cat((C, A, torch.mul(C, A), torch.mul(C, B)), dim=2)
-        output = F.dropout(output, p=config.LAYERS_DROPOUT, training=self.training)
+        output = F.dropout(output, p=config.layer_dropout, training=self.training)
         output = self.resizer(output)
         output = output.transpose(1, 2)
         return output
@@ -284,20 +284,25 @@ class QANet(nn.Module):
         super().__init__()
         self.word_embedding = nn.Embedding.from_pretrained(word_mat, freeze=True)
         self.char_embedding = nn.Embedding.from_pretrained(char_mat, freeze=False)
-        self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1], config.HIDDEN_SIZE)
-        self.embedding_encoder = EncoderBlock(
-            convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
-            hidden_size=config.HIDDEN_SIZE,
-            kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
+        self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1], config.global_hidden_size)
+        emb_encoder_block = EncoderBlock(
+            convolution_number=config.emb_encoder_conv_num,
+            hidden_size=config.global_hidden_size,
+            kernel_size=config.emb_encoder_conv_kernel_size,
+            head_number=config.attention_head_num
         )
-        self.cq_attention = CQAttention(hidden_size=config.HIDDEN_SIZE)
+        self.emb_encoder = nn.ModuleList(
+            [emb_encoder_block for _ in range(config.emb_encoder_block_num)])
+        self.cq_attention = CQAttention(hidden_size=config.global_hidden_size)
         output_encoder_block = EncoderBlock(
-            convolution_number=config.MODEL_ENCODER_CONVOLUTION_NUMBER,
-            hidden_size=config.HIDDEN_SIZE,
-            kernel_size=config.MODEL_ENCODER_CONVOLUTION_KERNEL_SIZE)
-        self.model_encoder = nn.ModuleList(
-            [output_encoder_block for _ in range(config.MODEL_ENCODER_BLOCK_NUMBER)])
-        self.output = OutputLayer(hidden_size=config.HIDDEN_SIZE)
+            convolution_number=config.output_encoder_conv_num,
+            hidden_size=config.global_hidden_size,
+            kernel_size=config.output_encoder_conv_kernel_size,
+            head_number=config.attention_head_num
+        )
+        self.output_encoder = nn.ModuleList(
+            [output_encoder_block for _ in range(config.output_encoder_block_num)])
+        self.output = OutputLayer(hidden_size=config.global_hidden_size)
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
         cmask = (torch.zeros_like(Cwid) != Cwid).float()
@@ -305,17 +310,18 @@ class QANet(nn.Module):
         Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
-        C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
+        for enc in self.emb_encoder:
+            C, Q = enc(C, cmask), enc(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
         stacked_model_input = F.dropout(CQ_attention, p=config.LAYERS_DROPOUT,
                                         training=self.training)
-        for enc in self.model_encoder:
+        for enc in self.output_encoder:
             stacked_model_input = enc(stacked_model_input, cmask)
         stacked_model_output1 = stacked_model_input
-        for enc in self.model_encoder:
+        for enc in self.output_encoder:
             stacked_model_input = enc(stacked_model_input, cmask)
         stacked_model_output2 = stacked_model_input
-        for enc in self.model_encoder:
+        for enc in self.output_encoder:
             stacked_model_input = enc(stacked_model_input, cmask)
         stacked_model_output3 = stacked_model_input
         start, end = self.output(stacked_model_output1, stacked_model_output2,
