@@ -22,7 +22,9 @@ class Highway(nn.Module):
         self.linear = nn.ModuleList(
             [nn.Linear(output_length, output_length) for _ in range(self.n)]
         )
-        self.gate = nn.ModuleList([nn.Linear(output_length, output_length) for _ in range(self.n)])
+        self.gate = nn.ModuleList(
+            [nn.Linear(output_length, output_length) for _ in range(self.n)]
+        )
         for linear, gate in zip(self.linear, self.gate):
             nn.init.kaiming_normal_(linear.weight, nonlinearity='relu')
             nn.init.kaiming_normal_(gate.weight, nonlinearity='relu')
@@ -48,11 +50,12 @@ class Embedding(nn.Module):
         emb: embedding result, shape [batch_size, embedding length, context max length] => [8, 500, 400]
 1    """
 
-    def __init__(self, wemb_dim, cemb_dim):
+    def __init__(self, wemb_dim, cemb_dim, out_features):
         super().__init__()
         self.conv2d = nn.Conv2d(cemb_dim, cemb_dim, kernel_size=(1, 5))
         nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
         self.highway = Highway(2, wemb_dim + cemb_dim)
+        self.resizer = nn.Linear(wemb_dim + cemb_dim, out_features)
 
     def forward(self, cemb: torch.Tensor, wemb: torch.Tensor):
         cemb = cemb.permute((0, 3, 1, 2))
@@ -66,6 +69,11 @@ class Embedding(nn.Module):
 
         emb = torch.cat((cemb, wemb), dim=1)
         emb = self.highway(emb)
+
+        emb = emb.transpose(1, 2)
+        emb = self.resizer(emb)
+        emb = emb.transpose(1, 2)
+
         return emb
 
 
@@ -111,7 +119,7 @@ class PositionEncoder(nn.Module):
         position = torch.arange(max_length).float()
         num_timescales = hidden_size // 2
         log_timescale_increment = (math.log(float(max_timescale) / float(min_timescale)) / (
-                float(num_timescales) - 1))
+            float(num_timescales) - 1))
         inv_timescales = min_timescale * torch.exp(
             torch.arange(num_timescales).float() * -log_timescale_increment
         )
@@ -133,55 +141,6 @@ def mask_logits(target, mask):
     return target + (-1e30) * (1 - mask)
 
 
-class MultiHeadAttention(nn.Module):
-    """
-    input:
-        x: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
-    output:
-        attention: shape [batch_size, hidden_size, context max length] => [8, 128, 400]
-    """
-
-    def __init__(self, hidden_size, head_number=config.ATTENTION_HEAD_NUMBER):
-        super().__init__()
-        self.head_number = head_number
-        self.dim_per_head = hidden_size // head_number
-        self.q_linear = nn.Linear(hidden_size, self.dim_per_head * self.head_number)  # 8 * Wq
-        self.v_linear = nn.Linear(hidden_size, self.dim_per_head * self.head_number)  # 8 * Wv
-        self.k_linear = nn.Linear(hidden_size, self.dim_per_head * self.head_number)  # 8 * Wk
-        self.dropout = nn.Dropout(config.LAYERS_DROPOUT)
-        self.linear_project = nn.Linear(hidden_size, hidden_size)
-        self.dim_sqrt_invert = 1 / math.sqrt(self.dim_per_head)
-
-    def forward(self, x, mask):
-        batch_size, dim, length = x.size()
-        x = x.transpose(1, 2)
-        q = self.q_linear(x).view(batch_size, length, self.head_number,
-                                  self.dim_per_head)  # project to eight multihead matrix
-        k = self.k_linear(x).view(batch_size, length, self.head_number,
-                                  self.dim_per_head)  # project to eight multihead matrix
-        v = self.v_linear(x).view(batch_size, length, self.head_number,
-                                  self.dim_per_head)  # project to eight multihead matrix
-        q = q.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length,
-                                                    self.dim_per_head)
-        k = k.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length,
-                                                    self.dim_per_head)
-        v = v.permute(2, 0, 1, 3).contiguous().view(batch_size * self.head_number, length,
-                                                    self.dim_per_head)
-        mask = mask.unsqueeze(1).expand(-1, length, -1).repeat(self.head_number, 1, 1)
-        attention = torch.bmm(q, k.transpose(1, 2)) * self.dim_sqrt_invert
-        attention = mask_logits(attention, mask)
-        attention = F.softmax(attention, dim=2)
-        attention = self.dropout(attention)
-        attention = torch.bmm(attention, v)
-        attention = attention.view((self.head_number, batch_size, length, self.dim_per_head)) \
-            .permute((1, 2, 0, 3)).contiguous().view(
-            (batch_size, length, self.dim_per_head * self.head_number))
-        attention = self.linear_project(attention)
-        attention = self.dropout(attention)
-        attention = attention.transpose(1, 2)
-        return attention
-
-
 class EncoderBlock(nn.Module):
     """
     input:
@@ -195,16 +154,19 @@ class EncoderBlock(nn.Module):
         super(EncoderBlock, self).__init__()
         self.convolution_number = convolution_number
         self.position_encoder = PositionEncoder(hidden_size)
-        self.convolution_list = nn.ModuleList(
-            [DepthwiseSeparableConvolution(hidden_size, hidden_size, kernel_size)
-             for _ in range(convolution_number)]
-        )
-        self.layer_normalization_list = nn.ModuleList(
+        self.convolution_list = nn.ModuleList([
+            DepthwiseSeparableConvolution(hidden_size, hidden_size, kernel_size)
+            for _ in range(convolution_number)
+        ])
+
+        self.convolution_normalization_list = nn.ModuleList(
             [nn.LayerNorm(hidden_size) for _ in range(convolution_number)]
         )
         self.attention_layer_normalization = nn.LayerNorm(hidden_size)
-        self.self_attention = MultiHeadAttention(hidden_size, head_number)
-        self.feedforward_layer_normalization = nn.LayerNorm(hidden_size)
+
+        self.self_attention = nn.MultiheadAttention(hidden_size, head_number,
+                                                    dropout=config.LAYERS_DROPOUT)
+        self.feedforward_normalization = nn.LayerNorm(hidden_size)
         self.feedforward = nn.Linear(hidden_size, hidden_size)
         nn.init.kaiming_normal_(self.feedforward.weight, nonlinearity='relu')
 
@@ -212,9 +174,9 @@ class EncoderBlock(nn.Module):
         x = self.position_encoder(x)
         for i in range(self.convolution_number):
             raw = x
-            x = self.layer_normalization_list[i](x.transpose(1, 2)).transpose(1, 2)
+            x = self.convolution_normalization_list[i](x.transpose(1, 2)).transpose(1, 2)
             x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
-            x = self.convolution_list[i](x)
+            x = self.convolution_list[i](x.cuda())
             x = F.dropout(x, config.LAYERS_DROPOUT * (i + 1) / self.convolution_number,
                           training=self.training)
             x = raw + x
@@ -222,12 +184,14 @@ class EncoderBlock(nn.Module):
         raw = x
         x = self.attention_layer_normalization(x.transpose(1, 2)).transpose(1, 2)
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
-        x = self.self_attention(x, mask)
+        x = x.permute(2, 0, 1)
+        x, _ = self.self_attention(x, x, x, key_padding_mask=mask.bool())
+        x = x.permute(1, 2, 0)
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = raw + x
 
         raw = x
-        x = self.feedforward_layer_normalization(x.transpose(1, 2)).transpose(1, 2)
+        x = self.feedforward_normalization(x.transpose(1, 2)).transpose(1, 2)
         x = F.dropout(x, config.LAYERS_DROPOUT, training=self.training)
         x = self.feedforward(x.transpose(1, 2)).transpose(1, 2)
         x = F.relu(x)
@@ -249,9 +213,10 @@ class CQAttention(nn.Module):
 
     def __init__(self, hidden_size):
         super().__init__()
-        self.line_project = torch.empty(hidden_size * 3)
-        nn.init.uniform_(self.line_project)
-        self.line_project = nn.Parameter(self.line_project)
+        self.line_project = torch.empty(hidden_size * 3, 1)
+        nn.init.xavier_uniform_(self.line_project)
+        self.line_project = nn.Parameter(self.line_project.squeeze(), requires_grad=True)
+        self.resizer = nn.Linear(hidden_size * 4, hidden_size)
 
     def forward(self, C, Q, cmask, qmask):
         # calculate CQ similarity
@@ -259,22 +224,26 @@ class CQAttention(nn.Module):
         Q = Q.transpose(1, 2)  # shape [batch_size, question max length, hidden_size]
         cmask = cmask.unsqueeze(2)  # shape [batch_size, context max length, 1]
         qmask = qmask.unsqueeze(1)  # shape [batch_size, 1, question max length]
+
+        # calculate S via trilinear function
         # (batch_size, context max length, question max length, hidden_size)
         shape = (C.size(0), C.size(1), Q.size(1), C.size(2))
         Ct = C.unsqueeze(2).expand(shape)
         Qt = Q.unsqueeze(1).expand(shape)
         CQ = torch.mul(Ct, Qt)  # element-wise multiplication
+        S = torch.matmul(torch.cat((Ct, Qt, CQ), dim=3), self.line_project)
 
-        # calculate S
-        S = torch.matmul(torch.cat((Ct, Qt, CQ), dim=3), self.line_project)  # trilinear function
         # context-wise softmax (one context word to every question word)
         S_row_sofmax = F.softmax(mask_logits(S, qmask), dim=2)
+
         # question-wise softmax (one question word to every context word)
         S_column_softmax = F.softmax(mask_logits(S, cmask), dim=1)
+
         A = torch.bmm(S_row_sofmax, Q)
         B = torch.bmm(torch.bmm(S_row_sofmax, S_column_softmax.transpose(1, 2)), C)
         output = torch.cat((C, A, torch.mul(C, A), torch.mul(C, B)), dim=2)
         output = F.dropout(output, p=config.LAYERS_DROPOUT, training=self.training)
+        output = self.resizer(output)
         output = output.transpose(1, 2)
         return output
 
@@ -282,12 +251,12 @@ class CQAttention(nn.Module):
 class OutputLayer(nn.Module):
     def __init__(self, hidden_size):
         super(OutputLayer, self).__init__()
-        self.weight1 = torch.empty(hidden_size * 2)
-        self.weight2 = torch.empty(hidden_size * 2)
-        nn.init.uniform_(self.weight1)
-        nn.init.uniform_(self.weight2)
-        self.weight1 = nn.Parameter(self.weight1)
-        self.weight2 = nn.Parameter(self.weight2)
+        self.weight1 = torch.empty(hidden_size * 2, 1)
+        self.weight2 = torch.empty(hidden_size * 2, 1)
+        nn.init.xavier_uniform_(self.weight1)
+        nn.init.xavier_uniform_(self.weight2)
+        self.weight1 = nn.Parameter(self.weight1.squeeze(), requires_grad=True)
+        self.weight2 = nn.Parameter(self.weight2.squeeze(), requires_grad=True)
 
     def forward(self, stacked_model_output1, stacked_model_output2, stacked_model_output3, cmask):
         start = torch.cat((stacked_model_output1, stacked_model_output2), dim=1)
@@ -315,19 +284,13 @@ class QANet(nn.Module):
         super().__init__()
         self.word_embedding = nn.Embedding.from_pretrained(word_mat, freeze=True)
         self.char_embedding = nn.Embedding.from_pretrained(char_mat, freeze=False)
-        self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1])
-        self.embedding_resizer = nn.Conv1d(
-            in_channels=config.GLOVE_WORD_REPRESENTATION_DIM + config.CHAR_REPRESENTATION_DIM,
-            out_channels=config.HIDDEN_SIZE, kernel_size=1
-        )
+        self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1], config.HIDDEN_SIZE)
         self.embedding_encoder = EncoderBlock(
             convolution_number=config.EMBEDDING_ENCODE_CONVOLUTION_NUMBER,
             hidden_size=config.HIDDEN_SIZE,
             kernel_size=config.EMBEDDING_ENCODER_CONVOLUTION_KERNEL_SIZE
         )
         self.cq_attention = CQAttention(hidden_size=config.HIDDEN_SIZE)
-        self.cq_resizer = nn.Conv1d(in_channels=config.HIDDEN_SIZE * 4,
-                                    out_channels=config.HIDDEN_SIZE, kernel_size=1)
         output_encoder_block = EncoderBlock(
             convolution_number=config.MODEL_ENCODER_CONVOLUTION_NUMBER,
             hidden_size=config.HIDDEN_SIZE,
@@ -342,11 +305,9 @@ class QANet(nn.Module):
         Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
         Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
-        C, Q = self.embedding_resizer(C), self.embedding_resizer(Q)
         C, Q = self.embedding_encoder(C, cmask), self.embedding_encoder(Q, qmask)
         CQ_attention = self.cq_attention(C, Q, cmask, qmask)
-        stacked_model_input = self.cq_resizer(CQ_attention)
-        stacked_model_input = F.dropout(stacked_model_input, p=config.LAYERS_DROPOUT,
+        stacked_model_input = F.dropout(CQ_attention, p=config.LAYERS_DROPOUT,
                                         training=self.training)
         for enc in self.model_encoder:
             stacked_model_input = enc(stacked_model_input, cmask)

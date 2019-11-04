@@ -1,12 +1,13 @@
 import os
 
+SQUAD_VERSION = 'v1.1'
 BASE_DIR = os.path.expanduser(".")
 
 # data config
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 GLOVE_DIR = os.path.join(DATA_DIR, "glove")
-GLOVE_WORD_REPRESENTATION = os.path.join(GLOVE_DIR, "glove.840B.300d.txt")
+GLOVE_WORD_REPRESENTATION = os.path.join(DATA_DIR, "glove.840B.300d.txt")
 GLOVE_WORD_REPRESENTATION_DIM = 300
 CHAR_REPRESENTATION_DIM = 200
 

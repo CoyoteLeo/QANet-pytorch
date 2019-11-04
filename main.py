@@ -28,8 +28,9 @@ class Runner(object):
 
     def _train(self, model: nn.Module, optimizer: optim.Adam, scheduler: LambdaLR, ema: EMA,
                dataset: SQuADDataset, start: int, length: int):
+        print(f'\nTraining epoch {start + 1}')
         model.train()
-        for i in tqdm(range(start, length + start), total=length):
+        for i in range(start, length + start):
             optimizer.zero_grad()
             Cwid, Ccid, Qwid, Qcid, y1, y2, ids = dataset[i]
             Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(
@@ -47,6 +48,8 @@ class Runner(object):
             for name, p in model.named_parameters():
                 if p.requires_grad:
                     ema.update_parameter(name, p)
+            print("\rSTEP {:6d}/{:<6d}  loss {:8f}".format(i + 1, len(dataset), loss.item()),
+                  end='')
 
     def _test(self, model: nn.Module, dataset: SQuADDataset, eval_file: dict, step=None,
               mode: str = 'test'):

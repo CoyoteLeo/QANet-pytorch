@@ -245,30 +245,7 @@ class SQuAd:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description='Preprocess data and generate training and testing example'
-    )
-
-    parser.add_argument(
-        '--squad-version',
-        default='all',
-        type=str,
-        dest="squad_version",
-        help=f'assign squad version, we support {", ".join(config.ALL_SUPPORT_SQUAD_VERSION)} now'
-        f' e.g., v1.1 (default: all)')
-    args = parser.parse_args()
-
     if not os.path.exists(config.GLOVE_WORD_REPRESENTATION):
         raise Exception("please download glove embedding file")
-    if args.squad_version not in config.ALL_SUPPORT_SQUAD_VERSION and args.squad_version != "all":
-        raise Exception("invalid squad version")
-    versions = config.ALL_SUPPORT_SQUAD_VERSION if args.squad_version == "all" else [
-        args.squad_version]
-    for v in versions:
-        if not all([os.path.exists(os.path.join(config.SQUAD_DIR, v, f)) for f in
-                    ["dev.json", "train.json"]]):
-            raise Exception("please check specify squad version data are downloaded in data folder")
-
-    for version in versions:
-        squad = SQuAd(version=version)
-        squad.preprocess()
+    squad = SQuAd(version="v1.1")
+    squad.preprocess()
