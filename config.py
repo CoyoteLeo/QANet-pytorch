@@ -5,6 +5,7 @@ import torch
 from absl import flags
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 # global
 BASE_DIR = os.path.expanduser(".")
@@ -54,13 +55,17 @@ flags.DEFINE_integer('attention_head_num', 8, "")
 # train & test config
 flags.DEFINE_integer('epoch_num', 40, "")
 flags.DEFINE_integer('train_batch_size', 16, "")
-flags.DEFINE_integer('eval_batch_size', 32, "")
-flags.DEFINE_integer('checkpoint', 2000, "")
+flags.DEFINE_integer('eval_batch_size', 140, "")
+flags.DEFINE_integer('checkpoint', 1400, "")
 flags.DEFINE_float('lr', 0.001, "")
 flags.DEFINE_integer('lr_warm_up_steps', 1000, "")
-flags.DEFINE_float('adam_beta1', 0.8, "")
+flags.DEFINE_float('adam_beta1', 0.9, "")
 flags.DEFINE_float('adam_beta2', 0.999, "")
-flags.DEFINE_float('ema_decay', 0.999, "")
+flags.DEFINE_float('adam_eps', 1e-7, "")
+flags.DEFINE_float('adam_decay', 5e-8, "")
+flags.DEFINE_float('ema_decay', 0.9999, "")
+flags.DEFINE_integer('grad_clip', 10, "")
+flags.DEFINE_integer("early_stop", 5, "Checkpoints for early stop")
 
 # predict
 RESULT_DIR = os.path.join(DATA_DIR, 'result')

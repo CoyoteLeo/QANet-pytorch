@@ -189,13 +189,13 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
 
     np.savez(
         file=out_file,
-        context_idxs=np.array(context_idxs),
-        context_char_idxs=np.array(context_char_idxs),
-        ques_idxs=np.array(ques_idxs),
-        ques_char_idxs=np.array(ques_char_idxs),
-        y1s=np.array(y1s),
-        y2s=np.array(y2s),
-        ids=np.array(ids)
+        context_idxs=np.array(context_idxs, dtype=np.long),
+        context_char_idxs=np.array(context_char_idxs, dtype=np.long),
+        ques_idxs=np.array(ques_idxs, dtype=np.long),
+        ques_char_idxs=np.array(ques_char_idxs, dtype=np.long),
+        y1s=np.array(y1s, dtype=np.long),
+        y2s=np.array(y2s, dtype=np.long),
+        ids=np.array(ids, dtype=np.long)
     )
     print(f"{len(ids)} / {len(examples)} available features")
 

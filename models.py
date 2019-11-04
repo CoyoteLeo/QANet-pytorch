@@ -3,9 +3,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from config import config
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from config import config, device
 
 
 class Highway(nn.Module):
@@ -56,6 +54,8 @@ class Embedding(nn.Module):
         nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
         self.highway = Highway(2, wemb_dim + cemb_dim)
         self.resizer = nn.Linear(wemb_dim + cemb_dim, out_features)
+        nn.init.kaiming_normal_(self.resizer.weight, nonlinearity='relu')
+        self.norm = nn.LayerNorm(out_features)
 
     def forward(self, cemb: torch.Tensor, wemb: torch.Tensor):
         cemb = cemb.permute((0, 3, 1, 2))
@@ -70,17 +70,17 @@ class Embedding(nn.Module):
         emb = torch.cat((cemb, wemb), dim=1)
         emb = self.highway(emb)
 
-        emb = emb.transpose(1, 2)
-        emb = self.resizer(emb)
-        emb = emb.transpose(1, 2)
+        emb = F.relu(self.resizer(emb.transpose(1, 2)))
+        emb = F.dropout(emb, p=config.word_emb_dropout, training=self.training)
+        emb = self.norm(emb).transpose(1, 2)
 
         return emb
 
 
-class DepthwiseSeparableConvolution(nn.Module):
+class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, activation=F.relu):
-        super(DepthwiseSeparableConvolution, self).__init__()
-        self.depthwise_convolution = nn.Conv1d(
+        super(DepthwiseSeparableConv, self).__init__()
+        self.depthwise_conv = nn.Conv1d(
             in_channels=in_channels,
             out_channels=in_channels,
             kernel_size=kernel_size,
@@ -88,7 +88,7 @@ class DepthwiseSeparableConvolution(nn.Module):
             groups=in_channels,
             bias=False
         )
-        self.pointwise_convolution = nn.Conv1d(
+        self.pointwise_conv = nn.Conv1d(
             in_channels=in_channels,
             out_channels=out_channels,
             padding=0,
@@ -98,8 +98,8 @@ class DepthwiseSeparableConvolution(nn.Module):
         self.activation = activation
 
     def forward(self, x):
-        x = self.depthwise_convolution(x)
-        x = self.pointwise_convolution(x)
+        x = self.depthwise_conv(x)
+        x = self.pointwise_conv(x)
         if self.activation:
             x = self.activation(x)
         return x
@@ -141,6 +141,47 @@ def mask_logits(target, mask):
     return target + (-1e30) * (1 - mask)
 
 
+class AttentionBlock(nn.Module):
+    def __init__(self, hidden_size, head_number):
+        super(AttentionBlock, self).__init__()
+        self.self_attention = nn.MultiheadAttention(hidden_size, head_number,
+                                                    dropout=config.layer_dropout)
+        self.attention_layer_norm = nn.LayerNorm(hidden_size)
+        self.feedforward_norm1 = nn.LayerNorm(hidden_size)
+        self.feedforward1 = nn.Linear(hidden_size, hidden_size)
+        self.feedforward_norm2 = nn.LayerNorm(hidden_size)
+        self.feedforward2 = nn.Linear(hidden_size, hidden_size)
+        self.feedforward_norm3 = nn.LayerNorm(hidden_size)
+        self.feedforward3 = nn.Linear(hidden_size, hidden_size)
+        nn.init.kaiming_normal_(self.feedforward1.weight, nonlinearity='relu')
+        nn.init.kaiming_normal_(self.feedforward2.weight, nonlinearity='relu')
+        nn.init.kaiming_normal_(self.feedforward3.weight, nonlinearity='relu')
+
+    def forward(self, x, mask):
+        raw = x
+        x = x.permute(2, 0, 1)
+        x, _ = self.self_attention(x, x, x, key_padding_mask=(mask.bool() == False))
+        x = x.permute(1, 2, 0)
+        x = F.dropout(x, config.layer_dropout, training=self.training)
+        x = self.attention_layer_norm(raw.transpose(1, 2) + x.transpose(1, 2)).transpose(1, 2)
+
+        raw = x
+        x = self.feedforward1(x.transpose(1, 2)).transpose(1, 2)
+        x = F.dropout(F.relu(x), config.layer_dropout, training=self.training)
+        x = self.feedforward_norm1(raw.transpose(1, 2) + x.transpose(1, 2)).transpose(1, 2)
+
+        raw = x
+        x = self.feedforward2(x.transpose(1, 2)).transpose(1, 2)
+        x = F.dropout(F.relu(x), config.layer_dropout, training=self.training)
+        x = self.feedforward_norm2(raw.transpose(1, 2) + x.transpose(1, 2)).transpose(1, 2)
+
+        raw = x
+        x = self.feedforward3(x.transpose(1, 2)).transpose(1, 2)
+        x = F.dropout(F.relu(x), config.layer_dropout, training=self.training)
+        x = self.feedforward_norm3(raw.transpose(1, 2) + x.transpose(1, 2)).transpose(1, 2)
+        return x
+
+
 class EncoderBlock(nn.Module):
     """
     input:
@@ -150,53 +191,31 @@ class EncoderBlock(nn.Module):
         x: shape [batch_size, hidden_size, max length] => [8, 128, 400]
     """
 
-    def __init__(self, convolution_number, hidden_size, kernel_size, head_number):
+    def __init__(self, conv_number, hidden_size, kernel_size, head_number):
         super(EncoderBlock, self).__init__()
-        self.convolution_number = convolution_number
+        self.conv_number = conv_number
         self.position_encoder = PositionEncoder(hidden_size)
-        self.convolution_list = nn.ModuleList([
-            DepthwiseSeparableConvolution(hidden_size, hidden_size, kernel_size)
-            for _ in range(convolution_number)
+        self.conv_list = nn.ModuleList([
+            DepthwiseSeparableConv(hidden_size, hidden_size, kernel_size)
+            for _ in range(self.conv_number)
         ])
 
-        self.convolution_normalization_list = nn.ModuleList(
-            [nn.LayerNorm(hidden_size) for _ in range(convolution_number)]
+        self.conv_norm_list = nn.ModuleList(
+            [nn.LayerNorm(hidden_size) for _ in range(self.conv_number)]
         )
-        self.attention_layer_normalization = nn.LayerNorm(hidden_size)
-
-        self.self_attention = nn.MultiheadAttention(hidden_size, head_number,
-                                                    dropout=config.layer_dropout)
-        self.feedforward_normalization = nn.LayerNorm(hidden_size)
-        self.feedforward = nn.Linear(hidden_size, hidden_size)
-        nn.init.kaiming_normal_(self.feedforward.weight, nonlinearity='relu')
+        self.self_attention = AttentionBlock(hidden_size, head_number)
 
     def forward(self, x, mask):
         x = self.position_encoder(x)
-        for i in range(self.convolution_number):
-            raw = x
-            x = self.convolution_normalization_list[i](x.transpose(1, 2)).transpose(1, 2)
-            x = F.dropout(x, config.layer_dropout, training=self.training)
-            x = self.convolution_list[i](x.cuda())
-            x = F.dropout(x, config.LAYERS_DRlayer_dropoutOPOUT * (i + 1) / self.convolution_number,
+        for i in range(self.conv_number):
+            raw = x.transpose(1, 2)
+            x = self.conv_list[i](x)
+            x = F.dropout(x, config.layer_dropout * (i + 1) / self.conv_number,
                           training=self.training)
-            x = raw + x
+            x = self.conv_norm_list[i](x.transpose(1, 2) + raw).transpose(1, 2)
 
-        raw = x
-        x = self.attention_layer_normalization(x.transpose(1, 2)).transpose(1, 2)
-        x = F.dropout(x, config.layer_dropout, training=self.training)
-        x = x.permute(2, 0, 1)
-        x, _ = self.self_attention(x, x, x, key_padding_mask=mask.bool())
-        x = x.permute(1, 2, 0)
-        x = F.dropout(x, config.layer_dropout, training=self.training)
-        x = raw + x
+        x = self.self_attention(x, mask)
 
-        raw = x
-        x = self.feedforward_normalization(x.transpose(1, 2)).transpose(1, 2)
-        x = F.dropout(x, config.layer_dropout, training=self.training)
-        x = self.feedforward(x.transpose(1, 2)).transpose(1, 2)
-        x = F.relu(x)
-        x = F.dropout(x, config.layer_dropout, training=self.training)
-        x = raw + x
         return x
 
 
@@ -217,6 +236,7 @@ class CQAttention(nn.Module):
         nn.init.xavier_uniform_(self.line_project)
         self.line_project = nn.Parameter(self.line_project.squeeze(), requires_grad=True)
         self.resizer = nn.Linear(hidden_size * 4, hidden_size)
+        nn.init.kaiming_normal_(self.resizer.weight, nonlinearity='relu')
 
     def forward(self, C, Q, cmask, qmask):
         # calculate CQ similarity
@@ -244,6 +264,8 @@ class CQAttention(nn.Module):
         output = torch.cat((C, A, torch.mul(C, A), torch.mul(C, B)), dim=2)
         output = F.dropout(output, p=config.layer_dropout, training=self.training)
         output = self.resizer(output)
+        output = F.relu(output)
+        output = F.dropout(output, p=config.layer_dropout, training=self.training)
         output = output.transpose(1, 2)
         return output
 
@@ -282,11 +304,11 @@ class QANet(nn.Module):
 
     def __init__(self, word_mat, char_mat):
         super().__init__()
-        self.word_embedding = nn.Embedding.from_pretrained(word_mat, freeze=True)
-        self.char_embedding = nn.Embedding.from_pretrained(char_mat, freeze=False)
+        self.word_embedding = nn.Embedding.from_pretrained(torch.tensor(word_mat), freeze=True)
+        self.char_embedding = nn.Embedding.from_pretrained(torch.tensor(char_mat), freeze=False)
         self.embedding = Embedding(word_mat.shape[1], char_mat.shape[1], config.global_hidden_size)
         emb_encoder_block = EncoderBlock(
-            convolution_number=config.emb_encoder_conv_num,
+            conv_number=config.emb_encoder_conv_num,
             hidden_size=config.global_hidden_size,
             kernel_size=config.emb_encoder_conv_kernel_size,
             head_number=config.attention_head_num
@@ -295,7 +317,7 @@ class QANet(nn.Module):
             [emb_encoder_block for _ in range(config.emb_encoder_block_num)])
         self.cq_attention = CQAttention(hidden_size=config.global_hidden_size)
         output_encoder_block = EncoderBlock(
-            convolution_number=config.output_encoder_conv_num,
+            conv_number=config.output_encoder_conv_num,
             hidden_size=config.global_hidden_size,
             kernel_size=config.output_encoder_conv_kernel_size,
             head_number=config.attention_head_num
@@ -312,9 +334,7 @@ class QANet(nn.Module):
         C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
         for enc in self.emb_encoder:
             C, Q = enc(C, cmask), enc(Q, qmask)
-        CQ_attention = self.cq_attention(C, Q, cmask, qmask)
-        stacked_model_input = F.dropout(CQ_attention, p=config.LAYERS_DROPOUT,
-                                        training=self.training)
+        stacked_model_input = self.cq_attention(C, Q, cmask, qmask)
         for enc in self.output_encoder:
             stacked_model_input = enc(stacked_model_input, cmask)
         stacked_model_output1 = stacked_model_input

@@ -1,183 +1,198 @@
-import argparse
-import os
-import random
-
 import math
 import numpy as np
 import torch
 import torch.cuda
-import torch.nn as nn
 import ujson as json
-from torch import optim
+from absl import app
+from torch.utils.tensorboard import SummaryWriter
+from torch.optim import Adam
 from torch.optim.lr_scheduler import LambdaLR
-from tqdm import tqdm
+from torch.utils.data import RandomSampler, SequentialSampler, DataLoader
+from torch.nn import functional as F
+from config import config, LOG_DIR, device
+from preproc import preproc
+from utils import EMA, SQuADDataset, convert_tokens, evaluate
 
-import config
-from models import QANet
-from utils import EMA, Evaluator, SQuADDataset
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"current device: {device}")
+writer = SummaryWriter(log_dir=LOG_DIR)
+loss_func = F.cross_entropy
 
 
-class Runner(object):
-    def __init__(self, squad_version, loss):
-        self.version = squad_version
-        self.dir = os.path.join(config.SQUAD_DIR, squad_version)
-        self.loss = loss
+def test(config, model, global_step=0, validate=False):
+    with open(config.dev_eval_file, "r") as fh:
+        dev_eval_file = json.load(fh)
+    dev_dataset = SQuADDataset(config.dev_record_file)
+    dev_sampler = SequentialSampler(dev_dataset)
+    dev_dataloader = DataLoader(dev_dataset, sampler=dev_sampler,
+                                batch_size=config.eval_batch_size)
+    print("\nValidate" if validate else "Test")
+    model.eval()
+    answer_dict = {}
+    losses = []
+    with torch.no_grad():
+        for step, (Cwid, Ccid, Qwid, Qcid, y1, y2, ids) in enumerate(dev_dataloader):
+            Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(
+                device)
 
-    def _train(self, model: nn.Module, optimizer: optim.Adam, scheduler: LambdaLR, ema: EMA,
-               dataset: SQuADDataset, start: int, length: int):
-        print(f'\nTraining epoch {start + 1}')
+            p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
+            y1, y2 = y1.to(device), y2.to(device)
+            loss = loss_func(p1, y1) + loss_func(p2, y2)
+            losses.append(loss.item())
+
+            p1 = F.softmax(p1, dim=1)
+            p2 = F.softmax(p2, dim=1)
+            outer = torch.matmul(p1.unsqueeze(2), p2.unsqueeze(1))
+            for j in range(outer.size()[0]):
+                outer[j] = torch.triu(outer[j])
+            a1, _ = torch.max(outer, dim=2)
+            a2, _ = torch.max(outer, dim=1)
+            ymin = torch.argmax(a1, dim=1)
+            ymax = torch.argmax(a2, dim=1)
+
+            answer_dict_, _ = convert_tokens(dev_eval_file, ids.tolist(), ymin.tolist(),
+                                             ymax.tolist())
+            answer_dict.update(answer_dict_)
+            print("\rSTEP {:6d}/{:<6d}  loss {:8f}".format(step, len(dev_dataloader), loss.item()),
+                  end='')
+    metrics = evaluate(dev_eval_file, answer_dict)
+    metrics["loss"] = loss
+
+    with open(config.answer_file, 'w') as f:
+        json.dump(answer_dict, f)
+
+    print(
+        "\nEVAL loss {:8f}\tF1 {:8f}\tEM {:8f}".format(loss, metrics["f1"], metrics["exact_match"]))
+    if config.mode == "train":
+        writer.add_scalar('data/test_loss', np.mean(losses), global_step)
+        writer.add_scalar('data/F1', metrics["f1"], global_step)
+        writer.add_scalar('data/EM', metrics["exact_match"], global_step)
+    return metrics
+
+
+def test_entry(config):
+    from models import QANet
+
+    with open(config.word_emb_file, "rb") as fh:
+        word_mat = np.array(json.load(fh), dtype=np.float32)
+    with open(config.char_emb_file, "rb") as fh:
+        char_mat = np.array(json.load(fh), dtype=np.float32)
+
+    model = QANet(word_mat, char_mat).to(device)
+    fn = config.model_file
+    model.load_state_dict(torch.load(fn, map_location=device))
+    test(config, model)
+
+
+def train_entry(config):
+    from models import QANet
+    with open(config.word_emb_file, "rb") as fh:
+        word_mat = np.array(json.load(fh), dtype=np.float32)
+    with open(config.char_emb_file, "rb") as fh:
+        char_mat = np.array(json.load(fh), dtype=np.float32)
+
+    model = QANet(word_mat, char_mat).to(device)
+
+    train_dataset = SQuADDataset(config.train_record_file)
+    train_sampler = RandomSampler(train_dataset)
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
+                                  batch_size=config.train_batch_size)
+
+    ema = EMA(config.ema_decay)
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            ema.register(name, param.data)
+
+    parameters = filter(lambda param: param.requires_grad, model.parameters())
+    optimizer = Adam(lr=1, betas=(config.adam_beta1, config.adam_beta2), eps=config.adam_eps,
+                     weight_decay=config.adam_decay, params=parameters)
+    cr = config.lr / math.log2(config.lr_warm_up_steps)
+    scheduler = LambdaLR(
+        optimizer,
+        lr_lambda=lambda ee: cr * math.log2(ee + 1) if ee < config.lr_warm_up_steps else config.lr
+    )
+
+    print(f"#################################################\n"
+          f"Start Training......\n"
+          f"epoch: {config.epoch_num}\n"
+          f"train batch size: {config.train_batch_size}\n"
+          f"checkpoint: {config.checkpoint}\n"
+          f"eval batch size: {config.eval_batch_size}\n"
+          f"learning rate: {config.lr}\n"
+          f"learning rate warning up num: {config.lr_warm_up_steps}\n"
+          f"early stop: {config.early_stop}\n"
+          f"#################################################")
+
+    best_f1 = best_em = patience = global_step = 0
+    for iter in range(1, config.epoch_num + 1):
         model.train()
-        for i in range(start, length + start):
-            optimizer.zero_grad()
-            Cwid, Ccid, Qwid, Qcid, y1, y2, ids = dataset[i]
+        losses = []
+        print(f"\nTraining Epoch {iter}")
+        for step, (Cwid, Ccid, Qwid, Qcid, y1, y2, ids) in enumerate(train_dataloader):
             Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(
                 device)
             p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
             y1, y2 = y1.to(device), y2.to(device)
-            loss1 = self.loss(p1, y1)
-            loss2 = self.loss(p2, y2)
-            # loss = torch.mean(loss1 + loss2)
-            loss = loss1 + loss2
+            loss1 = loss_func(p1, y1)
+            loss2 = loss_func(p2, y2)
+            loss = (loss1 + loss2)
+            losses.append(loss.item())
             loss.backward()
             torch.nn.utils.clip_grad_value_(model.parameters(), config.grad_clip)
             optimizer.step()
+            ema(model, global_step)
             scheduler.step()
-            for name, p in model.named_parameters():
-                if p.requires_grad:
-                    ema.update_parameter(name, p)
-            print("\rSTEP {:6d}/{:<6d}  loss {:8f}".format(i + 1, len(dataset), loss.item()),
-                  end='')
 
-    def _test(self, model: nn.Module, dataset: SQuADDataset, eval_file: dict, step=None,
-              mode: str = 'test'):
-        model.eval()
-        answer_dict = {}
-        losses = []
-        if mode != "test":
-            iterator = tqdm(random.sample(range(0, len(dataset)), config.VALIDATION_STEPS),
-                            total=config.VALIDATION_STEPS)
+            if global_step != 0 and global_step % config.checkpoint == 0:
+                ema.assign(model)
+                test(config, model, global_step, validate=True)
+                ema.resume(model)
+                model.train()
+            for param_group in optimizer.param_groups:
+                writer.add_scalar('data/lr', param_group['lr'], global_step)
+
+            writer.add_scalar('data/loss', loss.item(), global_step)
+            print("\rSTEP: {:6d}/{:<6d} loss: {:<8.3f} lr: {:.6f}".format(
+                step, len(train_dataloader), loss.item(), scheduler.get_lr()[0]
+            ), end='')
+        loss_avg = sum(losses) / len(losses)
+        print("\nAvg_loss {:8f}".format(loss_avg))
+
+        # after each epoch
+        ema.assign(model)
+        metrics = test(config, model, global_step, validate=True)
+        f1 = metrics["f1"]
+        em = metrics["exact_match"]
+        if f1 < best_f1 and em < best_em:
+            patience += 1
+            if patience > config.early_stop:
+                break
         else:
-            iterator = tqdm(range(config.TEST_STEPS), total=config.TEST_STEPS)
+            patience = 0
+            best_f1 = max(best_f1, f1)
+            best_em = max(best_em, em)
 
-        evaluator = Evaluator(eval_file=eval_file)
-        with torch.no_grad():
-            for i in iterator:
-                Cwid, Ccid, Qwid, Qcid, y1, y2, ids = dataset[i]
-                Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(
-                    device)
-                p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
-                y1, y2 = y1.to(device), y2.to(device)
-                loss1 = self.loss(p1, y1)
-                loss2 = self.loss(p2, y2)
-                # loss = torch.mean(loss1 + loss2)
-                loss = loss1 + loss2
-                losses.append(loss.item())
+        torch.save(model.state_dict(), config.model_file)
+        ema.resume(model)
 
-                yp1 = torch.argmax(p1, 1)
-                yp2 = torch.argmax(p2, 1)
-                yps = torch.stack((yp1, yp2), dim=1)
-                ymin, _ = torch.min(yps, 1)
-                ymax, _ = torch.max(yps, 1)
-                evaluator.update_result(ids.tolist(), ymin.tolist(), ymax.tolist())
-        loss = np.mean(losses)
-        metrics = evaluator.evaluate()
-        metrics["loss"] = loss
-        if mode == "test":
-            with open(os.path.join(self.dir, "answers.json"), "w") as f:
-                json.dump(answer_dict, f)
-        print(f"{f'Step: {step} ' if step else ''}{mode.upper()} loss {format(loss, '.8f')} "
-              f"F1 {format(metrics['f1'], '.8f')} "
-              f"EM {format(metrics['exact_match'], '.8f')}")
-        return metrics
-
-    def train(self):
-        if os.path.isdir(os.path.join(self.dir, "log")):
-            os.makedirs(os.path.join(self.dir, "log"))
-        with open(os.path.join(self.dir, config.WORD_EMB_FILE), "r") as f:
-            word_mat = torch.tensor(np.array(json.load(f), dtype=np.float32))
-        with open(os.path.join(self.dir, config.CHAR_EMB_FILE), "r") as f:
-            char_mat = torch.tensor(np.array(json.load(f), dtype=np.float32))
-        with open(os.path.join(self.dir, config.TRAIN_EVAL_FILE), "r") as f:
-            train_eval_file = json.load(f)
-        with open(os.path.join(self.dir, config.DEV_EVAL_FILE), "r") as f:
-            dev_eval_file = json.load(f)
-
-        train_dataset = SQuADDataset(os.path.join(self.dir, config.TRAIN_RECORD_FILE), config.STEPS,
-                                     config.BATCH_SIZE)
-        dev_dataset = SQuADDataset(os.path.join(self.dir, config.DEV_RECORD_FILE),
-                                   config.TEST_STEPS, config.BATCH_SIZE)
-
-        model = QANet(word_mat, char_mat).to(device)
-        ema = EMA(config.EMA_DECAY)
-        for name, p in model.named_parameters():
-            if p.requires_grad:
-                ema.set(name, p)
-
-        optimizer = optim.Adam(filter(lambda param: param.requires_grad, model.parameters()),
-                               lr=config.BASE_LR, betas=(config.ADAM_BETA1, config.ADAM_BETA2),
-                               eps=1e-8, weight_decay=3e-7)
-        cr = config.LR / math.log2(config.LR_WARM_UP_STEPS)
-        scheduler = optim.lr_scheduler.LambdaLR(
-            optimizer,
-            lr_lambda=lambda epoch: cr * math.log2(
-                epoch + 1) if epoch < config.LR_WARM_UP_STEPS else config.LR
-        )
-
-        best_f1 = best_em = patience = 0
-        for iter in range(0, config.STEPS, config.CHECKPOINT):
-            self._train(model=model, optimizer=optimizer, scheduler=scheduler, ema=ema,
-                        dataset=train_dataset, start=iter, length=config.CHECKPOINT)
-            metrics = self._test(model, dev_dataset, dev_eval_file, step=iter, mode="test")
-            print("Learning rate: {}\n".format(scheduler.get_lr()))
-
-            f1 = metrics["f1"]
-            em = metrics["exact_match"]
-            if f1 < best_f1 and em < best_em:
-                patience += 1
-                if patience > config.EARLY_STOP:
-                    break
-            else:
-                patience = 0
-                best_f1 = max(best_f1, f1)
-                best_em = max(best_em, em)
-
-            torch.save(model, os.path.join(self.dir, "model.pt"))
-
-        print(f"Best Score: F1 {format(best_f1, '.8f')} | EM {format(best_em, '.8f')}")
-
-    def test(self):
-        with open(os.path.join(self.dir, config.DEV_EVAL_FILE), "r") as f:
-            eval_file = json.load(f)
-        dataset = SQuADDataset(os.path.join(self.dir, config.DEV_RECORD_FILE), -1,
-                               config.BATCH_SIZE)
-        model = torch.load(os.path.join(self.dir, "model.pt"))
-        self._test(model=model, dataset=dataset, eval_file=eval_file, mode="test")
+    print(f"Best Score: F1 {format(best_f1, '.6f')} | EM {format(best_em, '.6f')}")
+    return model
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description='Preprocess data and generate training and testing example')
-    parser.add_argument('--squad-version', default='v1.1', type=str, dest="squad_version",
-                        help=f'please check that you have already preprocessing the correspond squad file')
-    parser.add_argument("--mode", action="store", dest="mode", default="debug",
-                        help="train/test/debug")
-    parser = parser.parse_args()
-    runner = Runner(squad_version=parser.squad_version, loss=nn.CrossEntropyLoss())
-    if parser.mode == "train":
-        runner.train()
-    elif parser.mode == "debug":
-        config.BATCH_SIZE = 1
-        config.STEPS = 16
-        config.TEST_STEPS = 2
-        config.VALIDATION_STEPS = 2
-        config.CHECKPOINT = 2
-        config.period = 1
-        runner.train()
-    elif parser.mode == "test":
-        runner.test()
+def main(*args, **kwarg):
+    # runner = Runner(loss=nn.CrossEntropyLoss())
+    if config.mode == "data":
+        preproc(config)
+    elif config.mode == "train":
+        train_entry(config)
+    elif config.mode == "debug":
+        config.epoch_num = 2
+        config.train_record_file = config.dev_record_file
+        train_entry(config)
+    elif config.mode == "eval":
+        test_entry(config)
     else:
         print("Unknown mode")
         exit(0)
+
+
+if __name__ == '__main__':
+    app.run(main)
