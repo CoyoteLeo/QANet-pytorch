@@ -5,7 +5,7 @@ import torch
 from absl import flags
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
+# device = torch.device("cpu")
 
 # global
 BASE_DIR = os.path.expanduser(".")

@@ -24,6 +24,7 @@ def test(config, model, global_step=0, validate=False):
     dev_sampler = SequentialSampler(dev_dataset)
     dev_dataloader = DataLoader(dev_dataset, sampler=dev_sampler,
                                 batch_size=config.eval_batch_size)
+
     print("\nValidate" if validate else "Test")
     model.eval()
     answer_dict = {}
@@ -83,24 +84,29 @@ def test_entry(config):
 
 
 def train_entry(config):
+    # model construct
     from models import QANet
     with open(config.word_emb_file, "rb") as fh:
         word_mat = np.array(json.load(fh), dtype=np.float32)
     with open(config.char_emb_file, "rb") as fh:
         char_mat = np.array(json.load(fh), dtype=np.float32)
-
     model = QANet(word_mat, char_mat).to(device)
+    model.train()
 
+    # data loader
     train_dataset = SQuADDataset(config.train_record_file)
     train_sampler = RandomSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
-                                  batch_size=config.train_batch_size)
+                                  batch_size=config.train_batch_size,
+                                  num_workers=config.train_batch_size, pin_memory=True)
 
+    # EMA
     ema = EMA(config.ema_decay)
     for name, param in model.named_parameters():
         if param.requires_grad:
             ema.register(name, param.data)
 
+    # optimizer
     parameters = filter(lambda param: param.requires_grad, model.parameters())
     optimizer = Adam(lr=1, betas=(config.adam_beta1, config.adam_beta2), eps=config.adam_eps,
                      weight_decay=config.adam_decay, params=parameters)
@@ -110,6 +116,7 @@ def train_entry(config):
         lr_lambda=lambda ee: cr * math.log2(ee + 1) if ee < config.lr_warm_up_steps else config.lr
     )
 
+    # training process
     print(f"#################################################\n"
           f"Start Training......\n"
           f"epoch: {config.epoch_num}\n"
@@ -121,33 +128,49 @@ def train_entry(config):
           f"early stop: {config.early_stop}\n"
           f"#################################################")
 
+    early_stop = False
     best_f1 = best_em = patience = global_step = 0
-    for iter in range(1, config.epoch_num + 1):
-        model.train()
+    for epoch in range(1, config.epoch_num + 1):
+        if early_stop:
+            break
+
         losses = []
-        print(f"\nTraining Epoch {iter}")
+        print(f"\nTraining Epoch {epoch}")
         for step, (Cwid, Ccid, Qwid, Qcid, y1, y2, ids) in enumerate(train_dataloader):
+            optimizer.zero_grad()
             Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(
                 device)
             p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
             y1, y2 = y1.to(device), y2.to(device)
-            loss1 = loss_func(p1, y1)
-            loss2 = loss_func(p2, y2)
-            loss = (loss1 + loss2)
+            loss = loss_func(p1, y1) + loss_func(p2, y2)
             losses.append(loss.item())
             loss.backward()
             torch.nn.utils.clip_grad_value_(model.parameters(), config.grad_clip)
             optimizer.step()
             ema(model, global_step)
-            scheduler.step()
+            scheduler.step(global_step)
 
             if global_step != 0 and global_step % config.checkpoint == 0:
                 ema.assign(model)
-                test(config, model, global_step, validate=True)
+                metrics = test(config, model, global_step, validate=True)
                 ema.resume(model)
                 model.train()
+
+                f1 = metrics["f1"]
+                em = metrics["exact_match"]
+                if f1 < best_f1 and em < best_em:
+                    patience += 1
+                    if patience > config.early_stop:
+                        early_stop = True
+                        break
+                else:
+                    patience = 0
+                    best_f1 = max(best_f1, f1)
+                    best_em = max(best_em, em)
+                torch.save(model.state_dict(), config.model_file)
             for param_group in optimizer.param_groups:
                 writer.add_scalar('data/lr', param_group['lr'], global_step)
+            global_step += 1
 
             writer.add_scalar('data/loss', loss.item(), global_step)
             print("\rSTEP: {:6d}/{:<6d} loss: {:<8.3f} lr: {:.6f}".format(
@@ -156,22 +179,13 @@ def train_entry(config):
         loss_avg = sum(losses) / len(losses)
         print("\nAvg_loss {:8f}".format(loss_avg))
 
-        # after each epoch
-        ema.assign(model)
-        metrics = test(config, model, global_step, validate=True)
-        f1 = metrics["f1"]
-        em = metrics["exact_match"]
-        if f1 < best_f1 and em < best_em:
-            patience += 1
-            if patience > config.early_stop:
-                break
-        else:
-            patience = 0
-            best_f1 = max(best_f1, f1)
-            best_em = max(best_em, em)
-
-        torch.save(model.state_dict(), config.model_file)
-        ema.resume(model)
+    # after training finished
+    ema.assign(model)
+    metrics = test(config, model, global_step, validate=True)
+    best_f1 = max(best_f1, metrics["f1"])
+    best_em = max(best_em, metrics["exact_match"])
+    torch.save(model.state_dict(), config.model_file)
+    ema.resume(model)
 
     print(f"Best Score: F1 {format(best_f1, '.6f')} | EM {format(best_em, '.6f')}")
     return model

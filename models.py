@@ -151,11 +151,8 @@ class AttentionBlock(nn.Module):
         self.feedforward1 = nn.Linear(hidden_size, hidden_size)
         self.feedforward_norm2 = nn.LayerNorm(hidden_size)
         self.feedforward2 = nn.Linear(hidden_size, hidden_size)
-        self.feedforward_norm3 = nn.LayerNorm(hidden_size)
-        self.feedforward3 = nn.Linear(hidden_size, hidden_size)
         nn.init.kaiming_normal_(self.feedforward1.weight, nonlinearity='relu')
         nn.init.kaiming_normal_(self.feedforward2.weight, nonlinearity='relu')
-        nn.init.kaiming_normal_(self.feedforward3.weight, nonlinearity='relu')
 
     def forward(self, x, mask):
         raw = x
@@ -175,10 +172,6 @@ class AttentionBlock(nn.Module):
         x = F.dropout(F.relu(x), config.layer_dropout, training=self.training)
         x = self.feedforward_norm2(raw.transpose(1, 2) + x.transpose(1, 2)).transpose(1, 2)
 
-        raw = x
-        x = self.feedforward3(x.transpose(1, 2)).transpose(1, 2)
-        x = F.dropout(F.relu(x), config.layer_dropout, training=self.training)
-        x = self.feedforward_norm3(raw.transpose(1, 2) + x.transpose(1, 2)).transpose(1, 2)
         return x
 
 
