@@ -1,4 +1,6 @@
 import math
+import os
+
 import numpy as np
 import torch
 import torch.cuda
@@ -192,7 +194,8 @@ def train_entry(config):
 
 
 def main(*args, **kwarg):
-    # runner = Runner(loss=nn.CrossEntropyLoss())
+    if not os.path.exists(LOG_DIR) and config.mode == 'train':
+        os.makedirs(LOG_DIR)
     if config.mode == "data":
         preproc(config)
     elif config.mode == "train":
@@ -206,6 +209,7 @@ def main(*args, **kwarg):
     else:
         print("Unknown mode")
         exit(0)
+    print(config.run_name)
 
 
 if __name__ == '__main__':

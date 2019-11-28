@@ -12,6 +12,7 @@ BASE_DIR = os.path.expanduser(".")
 SQUAD_VERSION = 'v1.1'
 flags.DEFINE_string('squad_version', SQUAD_VERSION, '')
 flags.DEFINE_string("mode", "debug", "train/debug/test")
+flags.DEFINE_string("run_name", "", "")
 
 # data
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'squad', SQUAD_VERSION)
@@ -47,9 +48,11 @@ flags.DEFINE_float('layer_dropout', 0.1, "")
 flags.DEFINE_integer('emb_encoder_conv_num', 4, "")
 flags.DEFINE_integer('emb_encoder_conv_kernel_size', 7, "")
 flags.DEFINE_integer('emb_encoder_block_num', 1, "")
+flags.DEFINE_integer('emb_encoder_ff_depth', 3, "")
 flags.DEFINE_integer('output_encoder_conv_num', 2, "")
 flags.DEFINE_integer('output_encoder_conv_kernel_size', 5, "")
 flags.DEFINE_integer('output_encoder_block_num', 7, "")
+flags.DEFINE_integer('output_encoder_ff_depth', 2, "")
 flags.DEFINE_integer('attention_head_num', 8, "")
 
 # train & test config
@@ -59,7 +62,7 @@ flags.DEFINE_integer('eval_batch_size', 140, "")
 flags.DEFINE_integer('checkpoint', 1400, "")
 flags.DEFINE_float('lr', 0.001, "")
 flags.DEFINE_integer('lr_warm_up_steps', 1000, "")
-flags.DEFINE_float('adam_beta1', 0.9, "")
+flags.DEFINE_float('adam_beta1', 0.8, "")
 flags.DEFINE_float('adam_beta2', 0.999, "")
 flags.DEFINE_float('adam_eps', 1e-7, "")
 flags.DEFINE_float('adam_decay', 5e-8, "")
@@ -81,5 +84,3 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 if not os.path.exists(RESULT_DIR):
     os.makedirs(RESULT_DIR)
-if not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR)
