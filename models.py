@@ -2,6 +2,7 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
+from transformers.modeling_bert import BertModel
 
 from config import config, device
 
@@ -119,7 +120,7 @@ class PositionEncoder(nn.Module):
         position = torch.arange(max_length).float()
         num_timescales = hidden_size // 2
         log_timescale_increment = (math.log(float(max_timescale) / float(min_timescale)) / (
-            float(num_timescales) - 1))
+                float(num_timescales) - 1))
         inv_timescales = min_timescale * torch.exp(
             torch.arange(num_timescales).float() * -log_timescale_increment
         )
@@ -281,18 +282,7 @@ class OutputLayer(nn.Module):
         return start, end
 
 
-class QANet(nn.Module):
-    """
-    input:
-        Cwid: context word id, shape [batch_size, context max length] => [8, 400]
-        Ccid: context word id, shape [batch_size, context max length, word length] => [8, 400, 16]
-        Qwid: context word id, shape [batch_size, Question max length] => [8, 50]
-        Qcid: context word id, shape [batch_size, Question max length, word length] => [8, 50, 16]
-    output:
-        start: start position probability, shape [batch_size, context max length] => [8, 400]
-        end: end position probability, shape [batch_size, context max length] => [8, 400]
-    """
-
+class QANetEncoder(nn.Module):
     def __init__(self, word_mat, char_mat):
         super().__init__()
         self.word_embedding = nn.Embedding.from_pretrained(torch.tensor(word_mat), freeze=True)
@@ -307,36 +297,57 @@ class QANet(nn.Module):
         )
         self.emb_encoder = nn.ModuleList(
             [emb_encoder_block for _ in range(config.emb_encoder_block_num)])
-        self.cq_attention = CQAttention(hidden_size=config.global_hidden_size)
-        output_encoder_block = EncoderBlock(
-            conv_num=config.output_encoder_conv_num,
-            hidden_size=config.global_hidden_size,
-            kernel_size=config.output_encoder_conv_kernel_size,
-            head_number=config.attention_head_num,
-            ff_depth=config.output_encoder_ff_depth,
-        )
-        self.output_encoder = nn.ModuleList(
-            [output_encoder_block for _ in range(config.output_encoder_block_num)])
-        self.output = OutputLayer(hidden_size=config.global_hidden_size)
 
-    def forward(self, Cwid, Ccid, Qwid, Qcid):
-        cmask = (torch.zeros_like(Cwid) != Cwid).float()
-        qmask = (torch.zeros_like(Qwid) != Qwid).float()
-        Cw, Cc = self.word_embedding(Cwid), self.char_embedding(Ccid)
-        Qw, Qc = self.word_embedding(Qwid), self.char_embedding(Qcid)
-        C, Q = self.embedding(Cc, Cw), self.embedding(Qc, Qw)
+    def forward(self, input_word_ids, input_char_id):
+        mask = (torch.zeros_like(input_word_ids) != input_word_ids).float()
+        w, c = self.word_embedding(input_word_ids), self.char_embedding(input_char_id)
+        emb = self.embedding(c, w)
         for enc in self.emb_encoder:
-            C, Q = enc(C, cmask), enc(Q, qmask)
-        stacked_model_input = self.cq_attention(C, Q, cmask, qmask)
-        for enc in self.output_encoder:
-            stacked_model_input = enc(stacked_model_input, cmask)
-        stacked_model_output1 = stacked_model_input
-        for enc in self.output_encoder:
-            stacked_model_input = enc(stacked_model_input, cmask)
-        stacked_model_output2 = stacked_model_input
-        for enc in self.output_encoder:
-            stacked_model_input = enc(stacked_model_input, cmask)
-        stacked_model_output3 = stacked_model_input
-        start, end = self.output(stacked_model_output1, stacked_model_output2,
-                                 stacked_model_output3, cmask)
-        return start, end
+            emb = enc(emb, mask)
+        emb = emb.transpose(1, 2)
+
+        return emb
+
+
+class QANet(nn.Module):
+    """
+    input:
+        Cwid: context word id, shape [batch_size, context max length] => [8, 400]
+        Ccid: context word id, shape [batch_size, context max length, word length] => [8, 400, 16]
+        Qwid: context word id, shape [batch_size, Question max length] => [8, 50]
+        Qcid: context word id, shape [batch_size, Question max length, word length] => [8, 50, 16]
+    output:
+        start: start position probability, shape [batch_size, context max length] => [8, 400]
+        end: end position probability, shape [batch_size, context max length] => [8, 400]
+    """
+
+    def __init__(self, word_mat, char_mat, train_target=None):
+        super().__init__()
+        self.train_target = train_target
+        self.qanet_encoder = QANetEncoder(word_mat, char_mat)
+        self.qa_norm = nn.LayerNorm(config.global_hidden_size)
+        self.bert = BertModel.from_pretrained(config.bert_type)
+        self.bert_norm = nn.LayerNorm(self.bert.config.hidden_size)
+        self.ff = nn.Linear(self.bert.config.hidden_size + config.global_hidden_size, 300)
+        self.qa_outputs = nn.Linear(300, self.bert.config.num_labels)
+
+    def forward(self, input_word_ids, input_char_ids, input_ids, input_masks, input_tokens):
+        emb = self.qanet_encoder(input_word_ids, input_char_ids)
+        outputs = self.bert(input_ids,
+                            attention_mask=input_masks,
+                            token_type_ids=input_tokens)
+        sequence_output = outputs[0]
+        if self.train_target == 'qanet':
+            sequence_output = torch.zeros_like(sequence_output)
+        elif self.train_target == 'bert':
+            emb = torch.zeros_like(emb)
+        emb = self.qa_norm(emb)
+        sequence_output = self.bert_norm(sequence_output)
+        sequence_output = torch.cat((sequence_output, emb), dim=-1)
+        sequence_output = self.ff(sequence_output)
+        sequence_output = F.dropout(sequence_output, 0.1, training=self.training)
+        logits = self.qa_outputs(sequence_output)
+        start_logits, end_logits = logits.split(1, dim=-1)
+        start_logits = start_logits.squeeze(-1)
+        end_logits = end_logits.squeeze(-1)
+        return start_logits, end_logits

@@ -47,9 +47,9 @@ def process_file(filename, data_type, word_counter, char_counter):
                 context_chars = [list(token) for token in context_tokens]
                 spans = convert_idx(context, context_tokens)  # get tokens span in context
                 for token in context_tokens:
-                    word_counter[token] += len(para["qas"])
+                    word_counter[token] += 1
                     for char in token:
-                        char_counter[char] += len(para["qas"])
+                        char_counter[char] += 1
                 # iter question-answer pairs
                 for qa in para["qas"]:
                     example_num += 1
@@ -106,7 +106,6 @@ def get_embedding(counter, data_type, vec_size, emb_file=None):
                 vector = list(map(float, array[-vec_size:]))
                 if word in counter:
                     embedding_dict[word] = vector
-        print(f"{len(embedding_dict)} / {len(counter)} available {data_type} embedding")
     else:
         for token in counter.keys():
             embedding_dict[token] = np.random.normal(size=(vec_size,), scale=0.1).tolist()
