@@ -12,6 +12,8 @@ BASE_DIR = os.path.expanduser(".")
 SQUAD_VERSION = 'v1.1'
 flags.DEFINE_string('squad_version', SQUAD_VERSION, '')
 flags.DEFINE_string("mode", "debug", "train/debug/test")
+flags.DEFINE_string("bert_type", "bert-base-uncased", "")
+flags.DEFINE_bool("with_no_answer", False, "")
 
 # data
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'squad', SQUAD_VERSION)
@@ -33,6 +35,8 @@ flags.DEFINE_string("dev_record_file", os.path.join(PREPROCESS_DIR, "dev.npz"), 
 flags.DEFINE_string("test_record_file", os.path.join(PREPROCESS_DIR, "test.npz"), "")
 flags.DEFINE_string("word_emb_file", os.path.join(PREPROCESS_DIR, "word_emb.pkl"), "")
 flags.DEFINE_string("char_emb_file", os.path.join(PREPROCESS_DIR, "char_emb.pkl"), "")
+flags.DEFINE_string("train_example_file", os.path.join(PREPROCESS_DIR, "train_example.json"), "")
+flags.DEFINE_string("dev_example_file", os.path.join(PREPROCESS_DIR, "dev_example.json"), "")
 flags.DEFINE_string("train_eval_file", os.path.join(PREPROCESS_DIR, "train_eval.json"), "")
 flags.DEFINE_string("dev_eval_file", os.path.join(PREPROCESS_DIR, "dev_eval.json"), "")
 flags.DEFINE_string("test_eval_file", os.path.join(PREPROCESS_DIR, "test_eval.json"), "")
@@ -46,7 +50,7 @@ flags.DEFINE_float('char_emb_dropout', 0.05, "")
 flags.DEFINE_float('layer_dropout', 0.1, "")
 flags.DEFINE_integer('emb_encoder_conv_num', 4, "")
 flags.DEFINE_integer('emb_encoder_conv_kernel_size', 7, "")
-flags.DEFINE_integer('emb_encoder_block_num', 1, "")
+flags.DEFINE_integer('emb_encoder_block_num', 2, "")
 flags.DEFINE_integer('emb_encoder_ff_depth', 3, "")
 flags.DEFINE_integer('output_encoder_conv_num', 2, "")
 flags.DEFINE_integer('output_encoder_conv_kernel_size', 5, "")
@@ -56,9 +60,9 @@ flags.DEFINE_integer('attention_head_num', 8, "")
 
 # train & test config
 flags.DEFINE_integer('epoch_num', 40, "")
-flags.DEFINE_integer('train_batch_size', 16, "")
-flags.DEFINE_integer('eval_batch_size', 140, "")
-flags.DEFINE_integer('checkpoint', 1400, "")
+flags.DEFINE_integer('train_batch_size', 6, "")
+flags.DEFINE_integer('eval_batch_size', 32, "")
+flags.DEFINE_integer('checkpoint', 3700, "")
 flags.DEFINE_float('lr', 0.001, "")
 flags.DEFINE_integer('lr_warm_up_steps', 1000, "")
 flags.DEFINE_float('adam_beta1', 0.8, "")
@@ -71,9 +75,12 @@ flags.DEFINE_integer("early_stop", 5, "Checkpoints for early stop")
 
 # predict
 RESULT_DIR = os.path.join(DATA_DIR, 'result')
+flags.DEFINE_string("model_qanet_pretrain_file", os.path.join(RESULT_DIR, "model_qanet.pt"), "")
+flags.DEFINE_string("model_bert_pretrain_file", os.path.join(RESULT_DIR, "model_bert.pt"), "")
 flags.DEFINE_string("model_file", os.path.join(RESULT_DIR, "model.pt"), "")
 flags.DEFINE_string("answer_file", os.path.join(RESULT_DIR, "answer.json"), "")
 LOG_DIR = os.path.join(RESULT_DIR, f'log_{datetime.datetime.now().strftime("%Y%m%d%H%M")}')
+
 
 config = flags.FLAGS
 

@@ -9,10 +9,15 @@ from torch.utils.data import Dataset
 class SQuADDataset(Dataset):
     def __init__(self, npz_file):
         data = np.load(npz_file)
-        self.context_idxs = data["context_idxs"]
-        self.context_char_idxs = data["context_char_idxs"]
-        self.ques_idxs = data["ques_idxs"]
-        self.ques_char_idxs = data["ques_char_idxs"]
+        # self.context_idxs = data["context_idxs"]
+        # self.context_char_idxs = data["context_char_idxs"]
+        # self.ques_idxs = data["ques_idxs"]
+        # self.ques_char_idxs = data["ques_char_idxs"]
+        self.input_word_ids = data["input_word_ids"]
+        self.input_char_ids = data["input_char_ids"]
+        self.input_ids = data["input_ids"]
+        self.input_masks = data["input_masks"]
+        self.input_token_type_ids = data["input_token_type_ids"]
         self.y1s = data["y1s"]
         self.y2s = data["y2s"]
         self.ids = data["ids"]
@@ -22,8 +27,20 @@ class SQuADDataset(Dataset):
         return self.num
 
     def __getitem__(self, idx):
-        return self.context_idxs[idx], self.context_char_idxs[idx], self.ques_idxs[idx], \
-               self.ques_char_idxs[idx], self.y1s[idx], self.y2s[idx], self.ids[idx]
+        return (
+            # self.context_idxs[idx],
+            # self.context_char_idxs[idx],
+            # self.ques_idxs[idx],
+            # self.ques_char_idxs[idx],
+            self.input_word_ids[idx],
+            self.input_char_ids[idx],
+            self.input_ids[idx],
+            self.input_masks[idx],
+            self.input_token_type_ids[idx],
+            self.y1s[idx],
+            self.y2s[idx],
+            self.ids[idx]
+        )
 
 
 class EMA:
@@ -152,10 +169,14 @@ def convert_tokens(eval_file, qa_id, pp1, pp2):
         context = eval_file[str(qid)]["context"]
         spans = eval_file[str(qid)]["spans"]
         uuid = eval_file[str(qid)]["uuid"]
-        start_idx = spans[p1][0]
-        end_idx = spans[p2][1]
-        answer_dict[str(qid)] = context[start_idx: end_idx]
-        remapped_dict[uuid] = context[start_idx: end_idx]
+        if p1 >= len(spans) or p2 >= len(spans):
+            answer_dict[str(qid)] = "empty"
+            remapped_dict[uuid] = "empty"
+        else:
+            start_idx = spans[p1][0]
+            end_idx = spans[p2][1]
+            answer_dict[str(qid)] = context[start_idx: end_idx]
+            remapped_dict[uuid] = context[start_idx: end_idx]
     return answer_dict, remapped_dict
 
 
