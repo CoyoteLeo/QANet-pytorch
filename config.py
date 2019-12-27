@@ -13,7 +13,7 @@ SQUAD_VERSION = 'v1.1'
 flags.DEFINE_string('squad_version', SQUAD_VERSION, '')
 flags.DEFINE_string("mode", "debug", "train/debug/test")
 flags.DEFINE_string("run_name", "", "")
-flags.DEFINE_string("bert_type", "bert-base-uncased", "")
+flags.DEFINE_string("bert_type", "bert-base-multilingual-uncased", "")
 flags.DEFINE_bool("with_no_answer", False, "")
 
 # data
@@ -61,9 +61,9 @@ flags.DEFINE_integer('attention_head_num', 8, "")
 
 # train & test config
 flags.DEFINE_integer('epoch_num', 40, "")
-flags.DEFINE_integer('train_batch_size', 6, "")
+flags.DEFINE_integer('train_batch_size', 5, "")
 flags.DEFINE_integer('eval_batch_size', 32, "")
-flags.DEFINE_integer('checkpoint', 3700, "")
+flags.DEFINE_integer('checkpoint', 4440, "")
 flags.DEFINE_float('lr', 0.001, "")
 flags.DEFINE_integer('lr_warm_up_steps', 1000, "")
 flags.DEFINE_float('adam_beta1', 0.8, "")

@@ -100,37 +100,45 @@ def train_entry(config, mode='total'):
 
     # optimizer
     no_decay = ['bias', 'LayerNorm.weight']
-    if mode == 'qanet':
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in model.qanet_encoder.named_parameters()],
-             'lr': 0.001, 'betas': (config.adam_beta1, config.adam_beta2), 'eps': config.adam_eps,
-             'weight_decay': config.adam_decay},
-            {'params': [p for n, p in model.qa_outputs.named_parameters()]},
-        ]
-    elif mode == 'bert':
-        model.qanet_encoder.load_state_dict(
-            torch.load(config.model_qanet_pretrain_file, map_location=device))
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in model.bert.named_parameters() if
-                        not any(nd in n for nd in no_decay)],
-             'weight_decay': 0.0},
-            {'params': [p for n, p in model.bert.named_parameters() if
-                        any(nd in n for nd in no_decay)],
-             'weight_decay': 0.0},
-            {'params': [p for n, p in model.qa_outputs.named_parameters()]},
-        ]
-    else:
-        model.qanet_encoder.load_state_dict(
-            torch.load(config.model_qanet_pretrain_file, map_location=device))
-        model.bert.load_state_dict(
-            torch.load(config.model_bert_pretrain_file, map_location=device))
-        optimizer_grouped_parameters = [
-            {
-                'params': [p for n, p in model.named_parameters()
-                           if n not in 'bert' and n not in 'qanet_encoder'],
-                'weight_decay': 0.0
-            },
-        ]
+    # if mode == 'qanet':
+    #     optimizer_grouped_parameters = [
+    #         {'params': [p for n, p in model.qanet_encoder.named_parameters()],
+    #          'lr': 0.001, 'betas': (config.adam_beta1, config.adam_beta2), 'eps': config.adam_eps,
+    #          'weight_decay': config.adam_decay},
+    #         {'params': [p for n, p in model.qa_outputs.named_parameters()]},
+    #     ]
+    # elif mode == 'bert':
+    #     model.qanet_encoder.load_state_dict(
+    #         torch.load(config.model_qanet_pretrain_file, map_location=device))
+    #     optimizer_grouped_parameters = [
+    #         {'params': [p for n, p in model.bert.named_parameters() if
+    #                     not any(nd in n for nd in no_decay)],
+    #          'weight_decay': 0.0},
+    #         {'params': [p for n, p in model.bert.named_parameters() if
+    #                     any(nd in n for nd in no_decay)],
+    #          'weight_decay': 0.0},
+    #         {'params': [p for n, p in model.qa_outputs.named_parameters()]},
+    #     ]
+    # else:
+    #     model.qanet_encoder.load_state_dict(
+    #         torch.load(config.model_qanet_pretrain_file, map_location=device))
+    #     model.bert.load_state_dict(
+    #         torch.load(config.model_bert_pretrain_file, map_location=device))
+    #     optimizer_grouped_parameters = [
+    #         {
+    #             'params': [p for n, p in model.named_parameters()
+    #                        if n not in 'bert' and n not in 'qanet_encoder'],
+    #             'weight_decay': 0.0
+    #         },
+    #     ]
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model.named_parameters() if
+                    not any(nd in n for nd in no_decay)],
+         'weight_decay': 0.0},
+        {'params': [p for n, p in model.named_parameters() if
+                    any(nd in n for nd in no_decay)],
+         'weight_decay': 0.0},
+    ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=5e-5, eps=1e-8)
 
     # data loader

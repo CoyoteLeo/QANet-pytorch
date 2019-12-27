@@ -328,8 +328,9 @@ class QANet(nn.Module):
         self.qa_norm = nn.LayerNorm(config.global_hidden_size)
         self.bert = BertModel.from_pretrained(config.bert_type)
         self.bert_norm = nn.LayerNorm(self.bert.config.hidden_size)
-        self.ff = nn.Linear(self.bert.config.hidden_size + config.global_hidden_size, 300)
-        self.qa_outputs = nn.Linear(300, self.bert.config.num_labels)
+        self.ff = nn.Linear(self.bert.config.hidden_size + config.global_hidden_size,
+                            self.bert.config.hidden_size)
+        self.qa_outputs = nn.Linear(self.bert.config.hidden_size, self.bert.config.num_labels)
 
     def forward(self, input_word_ids, input_char_ids, input_ids, input_masks, input_tokens):
         emb = self.qanet_encoder(input_word_ids, input_char_ids)
