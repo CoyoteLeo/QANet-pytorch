@@ -7,13 +7,12 @@ import torch.cuda
 import ujson as json
 from absl import app
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim import Adam
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import RandomSampler, SequentialSampler, DataLoader
 from torch.nn import functional as F
-from transformers import AdamW
-
 from config import config, LOG_DIR, device
 from preproc_bert import preproc
-# from preproc import preproc
 from utils import EMA, SQuADDataset, convert_tokens, evaluate
 
 writer = SummaryWriter(log_dir=LOG_DIR)
@@ -26,20 +25,16 @@ def test(config, model, global_step=0, validate=False):
     dev_dataset = SQuADDataset(config.dev_record_file)
     dev_sampler = SequentialSampler(dev_dataset)
     dev_dataloader = DataLoader(dev_dataset, sampler=dev_sampler,
-                                batch_size=config.eval_batch_size,
-                                num_workers=config.eval_batch_size)
+                                batch_size=config.eval_batch_size)
 
     print("\nValidate" if validate else "Test")
     model.eval()
     answer_dict = {}
     losses = []
     with torch.no_grad():
-        for step, (input_word_ids, input_char_id, input_id, input_mask, input_token_type_id, y1, y2,
-                   ids) in enumerate(dev_dataloader):
-            input_word_ids, input_char_id, input_id, input_mask, input_token_type_id = \
-                input_word_ids.to(device), input_char_id.to(device), input_id.to(
-                    device), input_mask.to(device), input_token_type_id.to(device)
-            p1, p2 = model(input_word_ids, input_char_id, input_id, input_mask, input_token_type_id)
+        for step, (Cwid, Qwid, y1, y2, ids) in enumerate(dev_dataloader):
+            Cwid, Qwid = Cwid.to(device), Qwid.to(device)
+            p1, p2 = model(Cwid, Qwid)
             y1, y2 = y1.to(device), y2.to(device)
             loss = loss_func(p1, y1) + loss_func(p2, y2)
             losses.append(loss.item())
@@ -51,8 +46,8 @@ def test(config, model, global_step=0, validate=False):
                 outer[j] = torch.triu(outer[j])
             a1, _ = torch.max(outer, dim=2)
             a2, _ = torch.max(outer, dim=1)
-            ymin = torch.argmax(a1, dim=1) - 1
-            ymax = torch.argmax(a2, dim=1) - 1
+            ymin = torch.argmax(a1, dim=1)
+            ymax = torch.argmax(a2, dim=1)
 
             answer_dict_, _ = convert_tokens(dev_eval_file, ids.tolist(), ymin.tolist(),
                                              ymax.tolist())
@@ -82,79 +77,44 @@ def test_entry(config):
     with open(config.char_emb_file, "rb") as fh:
         char_mat = np.array(json.load(fh), dtype=np.float32)
 
-    model = QANet(word_mat, char_mat).to(device)
+    model = QANet().to(device)
     fn = config.model_file
     model.load_state_dict(torch.load(fn, map_location=device))
     test(config, model)
 
 
-def train_entry(config, mode='total'):
+def train_entry(config):
     # model construct
     from models import QANet
     with open(config.word_emb_file, "rb") as fh:
         word_mat = np.array(json.load(fh), dtype=np.float32)
     with open(config.char_emb_file, "rb") as fh:
         char_mat = np.array(json.load(fh), dtype=np.float32)
-    model = QANet(word_mat, char_mat, train_target=mode).to(device)
+    model = QANet().to(device)
     model.train()
-
-    # optimizer
-    no_decay = ['bias', 'LayerNorm.weight']
-    # if mode == 'qanet':
-    #     optimizer_grouped_parameters = [
-    #         {'params': [p for n, p in model.qanet_encoder.named_parameters()],
-    #          'lr': 0.001, 'betas': (config.adam_beta1, config.adam_beta2), 'eps': config.adam_eps,
-    #          'weight_decay': config.adam_decay},
-    #         {'params': [p for n, p in model.qa_outputs.named_parameters()]},
-    #     ]
-    # elif mode == 'bert':
-    #     model.qanet_encoder.load_state_dict(
-    #         torch.load(config.model_qanet_pretrain_file, map_location=device))
-    #     optimizer_grouped_parameters = [
-    #         {'params': [p for n, p in model.bert.named_parameters() if
-    #                     not any(nd in n for nd in no_decay)],
-    #          'weight_decay': 0.0},
-    #         {'params': [p for n, p in model.bert.named_parameters() if
-    #                     any(nd in n for nd in no_decay)],
-    #          'weight_decay': 0.0},
-    #         {'params': [p for n, p in model.qa_outputs.named_parameters()]},
-    #     ]
-    # else:
-    #     model.qanet_encoder.load_state_dict(
-    #         torch.load(config.model_qanet_pretrain_file, map_location=device))
-    #     model.bert.load_state_dict(
-    #         torch.load(config.model_bert_pretrain_file, map_location=device))
-    #     optimizer_grouped_parameters = [
-    #         {
-    #             'params': [p for n, p in model.named_parameters()
-    #                        if n not in 'bert' and n not in 'qanet_encoder'],
-    #             'weight_decay': 0.0
-    #         },
-    #     ]
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in model.named_parameters() if
-                    not any(nd in n for nd in no_decay)],
-         'weight_decay': 0.0},
-        {'params': [p for n, p in model.named_parameters() if
-                    any(nd in n for nd in no_decay)],
-         'weight_decay': 0.0},
-    ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=5e-5, eps=1e-8)
 
     # data loader
     train_dataset = SQuADDataset(config.train_record_file)
     train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset,
-                                  sampler=train_sampler,
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
                                   batch_size=config.train_batch_size,
-                                  num_workers=config.train_batch_size,
-                                  pin_memory=True)
+                                  num_workers=config.train_batch_size, pin_memory=True)
 
     # EMA
     ema = EMA(config.ema_decay)
     for name, param in model.named_parameters():
         if param.requires_grad:
             ema.register(name, param.data)
+
+    # optimizer
+    parameters = filter(lambda param: param.requires_grad, model.parameters())
+    optimizer = Adam(lr=1, betas=(config.adam_beta1, config.adam_beta2), eps=config.adam_eps,
+                     weight_decay=config.adam_decay, params=parameters)
+    cr = config.lr / math.log2(config.lr_warm_up_steps)
+    scheduler = LambdaLR(
+        optimizer,
+        lr_lambda=lambda ee: cr * math.log2(ee + 1) if ee < config.lr_warm_up_steps else config.lr
+    )
 
     # training process
     print(f"#################################################\n"
@@ -176,13 +136,10 @@ def train_entry(config, mode='total'):
 
         losses = []
         print(f"\nTraining Epoch {epoch}")
-        for step, (input_word_ids, input_char_id, input_id, input_mask, input_token_type_id, y1, y2,
-                   ids) in enumerate(train_dataloader):
+        for step, (Cwid, Qwid, y1, y2, ids) in enumerate(train_dataloader):
             optimizer.zero_grad()
-            input_word_ids, input_char_id, input_id, input_mask, input_token_type_id = \
-                input_word_ids.to(device), input_char_id.to(device), input_id.to(
-                    device), input_mask.to(device), input_token_type_id.to(device)
-            p1, p2 = model(input_word_ids, input_char_id, input_id, input_mask, input_token_type_id)
+            Cwid, Qwid = Cwid.to(device), Qwid.to(device)
+            p1, p2 = model(Cwid, Qwid)
             y1, y2 = y1.to(device), y2.to(device)
             loss = loss_func(p1, y1) + loss_func(p2, y2)
             losses.append(loss.item())
@@ -190,6 +147,7 @@ def train_entry(config, mode='total'):
             torch.nn.utils.clip_grad_value_(model.parameters(), config.grad_clip)
             optimizer.step()
             ema(model, global_step)
+            scheduler.step(global_step)
 
             if global_step != 0 and global_step % config.checkpoint == 0:
                 ema.assign(model)
@@ -199,7 +157,7 @@ def train_entry(config, mode='total'):
 
                 f1 = metrics["f1"]
                 em = metrics["exact_match"]
-                if f1 - 0.05 < best_f1 and em - 0.05 < best_em:
+                if f1 < best_f1 and em < best_em:
                     patience += 1
                     if patience > config.early_stop:
                         early_stop = True
@@ -208,19 +166,15 @@ def train_entry(config, mode='total'):
                     patience = 0
                     best_f1 = max(best_f1, f1)
                     best_em = max(best_em, em)
-                if mode == 'qanet':
-                    torch.save(model.qanet_encoder.state_dict(), config.model_qanet_pretrain_file)
-                elif mode == 'bert':
-                    torch.save(model.bert.state_dict(), config.model_bert_pretrain_file)
-                else:
-                    torch.save(model.state_dict(), config.model_file)
+                torch.save(model.state_dict(), config.model_file)
             for param_group in optimizer.param_groups:
                 writer.add_scalar('data/lr', param_group['lr'], global_step)
             global_step += 1
 
             writer.add_scalar('data/loss', loss.item(), global_step)
-            print("\rSTEP: {:6d}/{:<6d} loss: {:<8.3f}".format(
-                step, len(train_dataloader), loss.item()), end='')
+            print("\rSTEP: {:6d}/{:<6d} loss: {:<8.3f} lr: {:.6f}".format(
+                step, len(train_dataloader), loss.item(), scheduler.get_lr()[0]
+            ), end='')
         loss_avg = sum(losses) / len(losses)
         print("\nAvg_loss {:8f}".format(loss_avg))
 
@@ -229,12 +183,7 @@ def train_entry(config, mode='total'):
     metrics = test(config, model, global_step, validate=True)
     best_f1 = max(best_f1, metrics["f1"])
     best_em = max(best_em, metrics["exact_match"])
-    if mode == 'qanet':
-        torch.save(model.qanet_encoder.state_dict(), config.model_qanet_pretrain_file)
-    elif mode == 'bert':
-        torch.save(model.bert.state_dict(), config.model_bert_pretrain_file)
-    else:
-        torch.save(model.state_dict(), config.model_file)
+    torch.save(model.state_dict(), config.model_file)
     ema.resume(model)
 
     print(f"Best Score: F1 {format(best_f1, '.6f')} | EM {format(best_em, '.6f')}")
@@ -247,9 +196,7 @@ def main(*args, **kwarg):
     if config.mode == "data":
         preproc(config)
     elif config.mode == "train":
-        # train_entry(config, 'qanet')
-        # train_entry(config, 'bert')
-        train_entry(config, 'total')
+        train_entry(config)
     elif config.mode == "debug":
         config.epoch_num = 2
         config.train_record_file = config.dev_record_file

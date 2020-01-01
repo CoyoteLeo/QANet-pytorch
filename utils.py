@@ -9,15 +9,8 @@ from torch.utils.data import Dataset
 class SQuADDataset(Dataset):
     def __init__(self, npz_file):
         data = np.load(npz_file)
-        # self.context_idxs = data["context_idxs"]
-        # self.context_char_idxs = data["context_char_idxs"]
-        # self.ques_idxs = data["ques_idxs"]
-        # self.ques_char_idxs = data["ques_char_idxs"]
-        self.input_word_ids = data["input_word_ids"]
-        self.input_char_ids = data["input_char_ids"]
-        self.input_ids = data["input_ids"]
-        self.input_masks = data["input_masks"]
-        self.input_token_type_ids = data["input_token_type_ids"]
+        self.context_idxs = data["context_idxs"]
+        self.ques_idxs = data["ques_idxs"]
         self.y1s = data["y1s"]
         self.y2s = data["y2s"]
         self.ids = data["ids"]
@@ -28,15 +21,8 @@ class SQuADDataset(Dataset):
 
     def __getitem__(self, idx):
         return (
-            # self.context_idxs[idx],
-            # self.context_char_idxs[idx],
-            # self.ques_idxs[idx],
-            # self.ques_char_idxs[idx],
-            self.input_word_ids[idx],
-            self.input_char_ids[idx],
-            self.input_ids[idx],
-            self.input_masks[idx],
-            self.input_token_type_ids[idx],
+            self.context_idxs[idx],
+            self.ques_idxs[idx],
             self.y1s[idx],
             self.y2s[idx],
             self.ids[idx]

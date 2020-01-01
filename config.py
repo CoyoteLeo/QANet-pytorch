@@ -61,7 +61,7 @@ flags.DEFINE_integer('attention_head_num', 8, "")
 
 # train & test config
 flags.DEFINE_integer('epoch_num', 40, "")
-flags.DEFINE_integer('train_batch_size', 5, "")
+flags.DEFINE_integer('train_batch_size', 6, "")
 flags.DEFINE_integer('eval_batch_size', 32, "")
 flags.DEFINE_integer('checkpoint', 4440, "")
 flags.DEFINE_float('lr', 0.001, "")

@@ -270,12 +270,10 @@ def get_embedding(counter, tokenizer, data_type, vec_size, emb_file=None):
     return emb_mat, token2idx_dict
 
 
-def build_features(config, examples, tokenizer: BertTokenizer, data_type, out_file, word2idx_dict,
-                   char2idx_dict, is_test=False):
+def build_features(config, examples, tokenizer: BertTokenizer, data_type, out_file, is_test=False):
     ques_limit = config.ques_limit
     para_limit = tokenizer.max_len_sentences_pair - ques_limit
     ans_limit = config.ans_limit
-    char_limit = config.char_limit
 
     def validate(example):
         if not example["y1s"] and not example["y2s"]:
@@ -284,27 +282,11 @@ def build_features(config, examples, tokenizer: BertTokenizer, data_type, out_fi
                and len(example["ques_tokens"]) <= ques_limit \
                and (example["y2s"][0] - example["y1s"][0]) <= ans_limit
 
-    def _get_word(word):
-        for each in (word, word.lower(), word.capitalize(), word.upper()):
-            if each in word2idx_dict:
-                return word2idx_dict[each]
-        return OOV_TOKEN_IDX
-
-    def _get_char(char):
-        if char in char2idx_dict:
-            return char2idx_dict[char]
-        return OOV_TOKEN_IDX
-
     print(f"Processing {data_type} examples...")
     context_idxs = []
     context_char_idxs = []
     ques_idxs = []
     ques_char_idxs = []
-    input_ids = []
-    input_masks = []
-    input_token_type_ids = []
-    input_word_ids = []
-    input_char_ids = []
     y1s = []
     y2s = []
     ids = []
@@ -312,87 +294,17 @@ def build_features(config, examples, tokenizer: BertTokenizer, data_type, out_fi
         if not is_test and not validate(example):
             continue
 
-        context_idx = np.zeros((para_limit,), dtype=np.int32)
-        context_char_idx = np.zeros((para_limit, char_limit), dtype=np.int32)
-        ques_idx = np.zeros((ques_limit,), dtype=np.int32)
-        ques_char_idx = np.zeros((ques_limit, char_limit), dtype=np.int32)
-
-        for i, token in enumerate(example["context_words"]):
-            context_idx[i] = _get_word(token)
-            for j, char in enumerate(token):
-                if j == char_limit:
-                    break
-                context_char_idx[i, j] = _get_char(char)
+        context_idx = tokenizer.convert_tokens_to_ids(example['context_tokens'])
+        while len(context_idx) < para_limit:
+            context_idx.append(tokenizer.pad_token_id)
         context_idxs.append(context_idx)
-        context_char_idxs.append(context_char_idx)
 
-        for i, token in enumerate(example["ques_words"]):
-            ques_idx[i] = _get_word(token)
-            for j, char in enumerate(token):
-                if j == char_limit:
-                    break
-                ques_char_idx[i, j] = _get_char(char)
+        ques_idx = tokenizer.convert_tokens_to_ids(example['ques_tokens'])
+        while len(ques_idx) < para_limit:
+            ques_idx.append(tokenizer.pad_token_id)
         ques_idxs.append(ques_idx)
-        ques_char_idxs.append(ques_char_idx)
-
-        # for bert
-        context_word_id = []
-        context_char_id = []
-        for word_index in example["context_token_to_word_index"]:
-            word = example['context_words'][word_index]
-            context_word_id.append(_get_word(word))
-            char_id = [NULL_TOKEN_IDX] * char_limit
-            for j, char in enumerate(word):
-                if j == char_limit:
-                    break
-                char_id[j] = _get_char(char)
-            context_char_id.append(char_id)
-
-        ques_word_id = []
-        ques_char_id = []
-        for word_index in example["ques_token_to_word_index"]:
-            word = example['ques_words'][word_index]
-            ques_word_id.append(_get_word(word))
-            char_id = [NULL_TOKEN_IDX] * char_limit
-            for j, char in enumerate(word):
-                if j == char_limit:
-                    break
-                char_id[j] = _get_char(char)
-            ques_char_id.append(char_id)
-
-        input_word_id = [word2idx_dict[tokenizer.cls_token]] + \
-                        context_word_id + \
-                        [word2idx_dict[tokenizer.sep_token]] + \
-                        ques_word_id + \
-                        [word2idx_dict[tokenizer.sep_token]]
-        input_char_id = [[char2idx_dict[tokenizer.cls_token]] * char_limit] + \
-                        context_char_id + \
-                        [[char2idx_dict[tokenizer.sep_token]] * char_limit] + \
-                        ques_char_id + \
-                        [[char2idx_dict[tokenizer.sep_token]] * char_limit]
-        context_id = tokenizer.convert_tokens_to_ids(example['context_tokens'])
-        query_id = tokenizer.convert_tokens_to_ids(example['ques_tokens'])
-        input_id = tokenizer.build_inputs_with_special_tokens(context_id, query_id)
-        input_token_type_id = tokenizer.create_token_type_ids_from_sequences(context_id,
-                                                                             query_id)
-        input_mask = [1] * len(input_id)
-        while len(input_id) < tokenizer.max_len:
-            input_word_id.append(NULL_TOKEN_IDX)
-            input_id.append(tokenizer.pad_token_id)
-            input_token_type_id.append(0)
-            input_mask.append(0)
-            input_char_id.append([NULL_TOKEN_IDX] * char_limit)
-        assert len(input_id) == len(input_mask) == len(input_token_type_id) == len(
-            input_word_id) == len(input_char_id) == tokenizer.max_len
-        input_word_ids.append(input_word_id)
-        input_char_ids.append(input_char_id)
-        input_ids.append(input_id)
-        input_masks.append(input_mask)
-        input_token_type_ids.append(input_token_type_id)
 
         start, end = example["y1s"][-1], example["y2s"][-1]
-        start += 1
-        end += 1
         y1s.append(start)
         y2s.append(end)
         ids.append(example["id"])
@@ -400,17 +312,7 @@ def build_features(config, examples, tokenizer: BertTokenizer, data_type, out_fi
     np.savez(
         file=out_file,
         context_idxs=np.array(context_idxs, dtype=np.long),
-        context_char_idxs=np.array(context_char_idxs, dtype=np.long),
         ques_idxs=np.array(ques_idxs, dtype=np.long),
-        ques_char_idxs=np.array(ques_char_idxs, dtype=np.long),
-
-        # for bert
-        input_ids=np.array(input_ids, dtype=np.long),
-        input_masks=np.array(input_masks, dtype=np.long),
-        input_token_type_ids=np.array(input_token_type_ids, dtype=np.long),
-        input_word_ids=np.array(input_word_ids, dtype=np.long),
-        input_char_ids=np.array(input_char_ids, dtype=np.long),
-
         y1s=np.array(y1s, dtype=np.long),
         y2s=np.array(y2s, dtype=np.long),
         ids=np.array(ids, dtype=np.long)
@@ -425,7 +327,7 @@ def save(filename, obj, message=None):
             json.dump(obj, fh)
 
 
-def preproc(config, force=True):
+def preproc(config, force=False):
     tokenizer = BertTokenizer.from_pretrained(config.bert_type)
     word_counter, char_counter = Counter(), Counter()
     if not force and os.path.exists(config.train_example_file) and \
@@ -435,10 +337,6 @@ def preproc(config, force=True):
             train_examples = json.load(fh)
         with open(config.dev_example_file, "rb") as fh:
             dev_examples = json.load(fh)
-        with open(config.word2idx_file, "rb") as fh:
-            word2idx_dict = json.load(fh)
-        with open(config.char2idx_file, "rb") as fh:
-            char2idx_dict = json.load(fh)
     else:
         train_examples, train_eval = process_file(
             filename=config.train_file,
@@ -454,35 +352,15 @@ def preproc(config, force=True):
             word_counter=word_counter,
             char_counter=char_counter
         )
-        word_emb_mat, word2idx_dict = get_embedding(
-            counter=word_counter,
-            tokenizer=tokenizer,
-            data_type="word",
-            emb_file=config.glove_emb,
-            vec_size=config.word_emb_dim,
-        )
-        char_emb_mat, char2idx_dict = get_embedding(
-            counter=char_counter,
-            tokenizer=tokenizer,
-            data_type="char",
-            emb_file=None,
-            vec_size=config.char_emb_dim
-        )
         # test_examples, test_eval = process_file(config.test_file, "test", word_counter, char_counter)
         save(config.train_example_file, train_examples, message="train example")
         save(config.dev_example_file, dev_examples, message="dev example")
         save(config.train_eval_file, train_eval, message="train eval")
         save(config.dev_eval_file, dev_eval, message="dev eval")
-        save(config.word2idx_file, word2idx_dict, message="word dictionary")
-        save(config.char2idx_file, char2idx_dict, message="char dictionary")
-        save(config.word_emb_file, word_emb_mat, message="word embedding")
-        save(config.char_emb_file, char_emb_mat, message="char embedding")
         save("invalid_example.json", invalid, message="invalid example")
 
-    build_features(config, train_examples, tokenizer, "train", config.train_record_file,
-                   word2idx_dict, char2idx_dict)
-    build_features(config, dev_examples, tokenizer, "dev", config.dev_record_file, word2idx_dict,
-                   char2idx_dict)
+    build_features(config, train_examples, tokenizer, "train", config.train_record_file)
+    build_features(config, dev_examples, tokenizer, "dev", config.dev_record_file)
     # build_features(config, test_examples, "test", config.test_record_file, word2idx_dict, char2idx_dict, is_test=True)
 
     # save(config.test_eval_file, test_eval, message="test eval")
